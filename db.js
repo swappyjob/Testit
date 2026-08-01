@@ -35,11 +35,13 @@ CREATE TABLE IF NOT EXISTS signup_tokens (
 );
 
 CREATE TABLE IF NOT EXISTS tests (
-  id          INTEGER PRIMARY KEY AUTOINCREMENT,
-  teacher_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  title       TEXT NOT NULL,
-  description TEXT NOT NULL DEFAULT '',
-  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  teacher_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title            TEXT NOT NULL,
+  description      TEXT NOT NULL DEFAULT '',
+  negative_marking INTEGER NOT NULL DEFAULT 0,  -- 1 = deduct marks for wrong answers
+  penalty          INTEGER NOT NULL DEFAULT 0,  -- marks deducted per wrong auto-graded answer
+  created_at       TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS questions (
@@ -91,5 +93,15 @@ CREATE TABLE IF NOT EXISTS sessions (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 `);
+
+// --- Lightweight migrations for databases created before a column existed ----
+function ensureColumn(table, column, definition) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (!cols.some((c) => c.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+}
+ensureColumn('tests', 'negative_marking', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('tests', 'penalty', 'INTEGER NOT NULL DEFAULT 0');
 
 export default db;

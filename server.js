@@ -187,60 +187,103 @@ app.post('/api/signup/:token', (req, res) => {
 // ============================================================================
 // TESTS  (teacher creates + manages)
 // ============================================================================
+// Returns an error string if the questions are invalid, otherwise null.
+function validateQuestions(questions) {
+  if (questions.length === 0) return 'Add at least one question.';
+  for (const [i, q] of questions.entries()) {
+    if (!q.prompt || !q.prompt.trim()) return `Question ${i + 1} is missing its text.`;
+    if (!['mcq', 'truefalse', 'short'].includes(q.type)) return `Question ${i + 1} has an invalid type.`;
+    if (q.type === 'mcq') {
+      const opts = Array.isArray(q.options) ? q.options.filter((o) => o.trim() !== '') : [];
+      if (opts.length < 2) return `Question ${i + 1} needs at least two choices.`;
+      const ci = Number(q.correct);
+      if (!Number.isInteger(ci) || ci < 0 || ci >= opts.length)
+        return `Question ${i + 1} needs a correct choice selected.`;
+    }
+    if (q.type === 'truefalse' && !['true', 'false'].includes(String(q.correct)))
+      return `Question ${i + 1} needs a correct answer (True/False).`;
+  }
+  return null;
+}
+
+// Insert the given questions for a test (assumes the test has no questions yet).
+function writeQuestions(testId, questions) {
+  const insertQ = db.prepare(
+    `INSERT INTO questions (test_id, type, prompt, options_json, correct_answer, points, position)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  );
+  questions.forEach((q, idx) => {
+    let options = '[]';
+    let correct = '';
+    if (q.type === 'mcq') {
+      options = JSON.stringify(q.options.filter((o) => o.trim() !== ''));
+      correct = String(q.correct);
+    } else if (q.type === 'truefalse') {
+      correct = String(q.correct);
+    }
+    const points = Number(q.points) > 0 ? Number(q.points) : 1;
+    insertQ.run(testId, q.type, q.prompt.trim(), options, correct, points, idx);
+  });
+}
+
+// Normalize the negative-marking settings from a request body.
+function readMarking(body) {
+  const on = body.negativeMarking ? 1 : 0;
+  let penalty = Math.round(Number(body.penalty));
+  if (!Number.isFinite(penalty) || penalty < 1) penalty = 1;
+  return { negative_marking: on, penalty: on ? penalty : 0 };
+}
+
 app.post('/api/tests', requireAuth('teacher'), (req, res) => {
   const title = (req.body.title || '').trim();
   const description = (req.body.description || '').trim();
   const questions = Array.isArray(req.body.questions) ? req.body.questions : [];
   if (!title) return res.status(400).json({ error: 'Test title is required.' });
-  if (questions.length === 0) return res.status(400).json({ error: 'Add at least one question.' });
+  const invalid = validateQuestions(questions);
+  if (invalid) return res.status(400).json({ error: invalid });
+  const { negative_marking, penalty } = readMarking(req.body);
 
-  for (const [i, q] of questions.entries()) {
-    if (!q.prompt || !q.prompt.trim())
-      return res.status(400).json({ error: `Question ${i + 1} is missing its text.` });
-    if (!['mcq', 'truefalse', 'short'].includes(q.type))
-      return res.status(400).json({ error: `Question ${i + 1} has an invalid type.` });
-    if (q.type === 'mcq') {
-      const opts = Array.isArray(q.options) ? q.options.filter((o) => o.trim() !== '') : [];
-      if (opts.length < 2)
-        return res.status(400).json({ error: `Question ${i + 1} needs at least two choices.` });
-      const ci = Number(q.correct);
-      if (!Number.isInteger(ci) || ci < 0 || ci >= opts.length)
-        return res.status(400).json({ error: `Question ${i + 1} needs a correct choice selected.` });
-    }
-    if (q.type === 'truefalse' && !['true', 'false'].includes(String(q.correct)))
-      return res.status(400).json({ error: `Question ${i + 1} needs a correct answer (True/False).` });
-  }
-
-  const insertTest = db.prepare('INSERT INTO tests (teacher_id, title, description) VALUES (?, ?, ?)');
-  const insertQ = db.prepare(
-    `INSERT INTO questions (test_id, type, prompt, options_json, correct_answer, points, position)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
-  );
   const testId = transaction(() => {
-    const newId = Number(insertTest.run(req.user.id, title, description).lastInsertRowid);
-    questions.forEach((q, idx) => {
-      let options = '[]';
-      let correct = '';
-      if (q.type === 'mcq') {
-        const opts = q.options.filter((o) => o.trim() !== '');
-        options = JSON.stringify(opts);
-        correct = String(q.correct);
-      } else if (q.type === 'truefalse') {
-        correct = String(q.correct);
-      }
-      const points = Number(q.points) > 0 ? Number(q.points) : 1;
-      insertQ.run(newId, q.type, q.prompt.trim(), options, correct, points, idx);
-    });
+    const newId = Number(db.prepare(
+      'INSERT INTO tests (teacher_id, title, description, negative_marking, penalty) VALUES (?, ?, ?, ?, ?)'
+    ).run(req.user.id, title, description, negative_marking, penalty).lastInsertRowid);
+    writeQuestions(newId, questions);
     return newId;
   });
   res.json({ id: testId });
 });
 
+// Update an existing test. Replaces its questions, so any existing student
+// submissions for this test are cleared (their old answers no longer apply).
+app.put('/api/tests/:id', requireAuth('teacher'), (req, res) => {
+  const test = db.prepare('SELECT * FROM tests WHERE id = ? AND teacher_id = ?').get(req.params.id, req.user.id);
+  if (!test) return res.status(404).json({ error: 'Test not found.' });
+  const title = (req.body.title || '').trim();
+  const description = (req.body.description || '').trim();
+  const questions = Array.isArray(req.body.questions) ? req.body.questions : [];
+  if (!title) return res.status(400).json({ error: 'Test title is required.' });
+  const invalid = validateQuestions(questions);
+  if (invalid) return res.status(400).json({ error: invalid });
+  const { negative_marking, penalty } = readMarking(req.body);
+
+  const clearedAttempts = transaction(() => {
+    // Removing attempts also cascade-deletes their answers; assignments are kept.
+    const cleared = db.prepare('DELETE FROM attempts WHERE test_id = ?').run(test.id).changes;
+    db.prepare('DELETE FROM questions WHERE test_id = ?').run(test.id);
+    db.prepare('UPDATE tests SET title = ?, description = ?, negative_marking = ?, penalty = ? WHERE id = ?')
+      .run(title, description, negative_marking, penalty, test.id);
+    writeQuestions(test.id, questions);
+    return cleared;
+  });
+  res.json({ id: test.id, clearedAttempts });
+});
+
 app.get('/api/tests', requireAuth('teacher'), (req, res) => {
   const tests = db.prepare(
-    `SELECT t.id, t.title, t.description, t.created_at,
+    `SELECT t.id, t.title, t.description, t.negative_marking, t.penalty, t.created_at,
             (SELECT COUNT(*) FROM questions q WHERE q.test_id = t.id) AS question_count,
-            (SELECT COUNT(*) FROM assignments a WHERE a.test_id = t.id) AS assigned_count
+            (SELECT COUNT(*) FROM assignments a WHERE a.test_id = t.id) AS assigned_count,
+            (SELECT COUNT(*) FROM attempts at WHERE at.test_id = t.id AND at.submitted_at IS NOT NULL) AS submitted_count
        FROM tests t WHERE t.teacher_id = ? ORDER BY t.created_at DESC`
   ).all(req.user.id);
   res.json({ tests });
@@ -333,7 +376,7 @@ app.get('/api/take/:assignmentId', requireAuth('student'), (req, res) => {
   if (existing && existing.submitted_at)
     return res.status(409).json({ error: 'You have already submitted this test.' });
 
-  const test = db.prepare('SELECT id, title, description FROM tests WHERE id = ?').get(a.test_id);
+  const test = db.prepare('SELECT id, title, description, negative_marking, penalty FROM tests WHERE id = ?').get(a.test_id);
   const questions = db.prepare('SELECT id, type, prompt, options_json, points FROM questions WHERE test_id = ? ORDER BY position')
     .all(a.test_id)
     .map((q) => ({ id: q.id, type: q.type, prompt: q.prompt, points: q.points, options: JSON.parse(q.options_json) }));
@@ -349,6 +392,7 @@ app.post('/api/submit/:assignmentId', requireAuth('student'), (req, res) => {
   if (existing && existing.submitted_at)
     return res.status(409).json({ error: 'You have already submitted this test.' });
 
+  const test = db.prepare('SELECT negative_marking, penalty FROM tests WHERE id = ?').get(a.test_id);
   const questions = db.prepare('SELECT * FROM questions WHERE test_id = ? ORDER BY position').all(a.test_id);
   const responses = req.body.answers || {}; // { questionId: response }
 
@@ -362,8 +406,11 @@ app.post('/api/submit/:assignmentId', requireAuth('student'), (req, res) => {
     let isCorrect = null;
     let awarded = 0;
     if (q.type === 'mcq' || q.type === 'truefalse') {
-      isCorrect = resp !== '' && resp === q.correct_answer ? 1 : 0;
-      awarded = isCorrect ? q.points : 0;
+      const answered = resp !== '';
+      isCorrect = answered && resp === q.correct_answer ? 1 : 0;
+      if (isCorrect) awarded = q.points;
+      // Deduct marks only for a WRONG (not blank) answer when negative marking is on.
+      else if (answered && test.negative_marking) awarded = -test.penalty;
       autoScore += awarded;
     } else {
       needsGrading = 1; // short answer — teacher grades later
@@ -490,7 +537,11 @@ app.post('/api/attempts/:attemptId/grade', requireAuth('teacher'), (req, res) =>
 });
 
 // --- Static files ------------------------------------------------------------
-app.use(express.static(path.join(__dirname, 'public')));
+// no-cache so the browser always revalidates and never shows a stale page.
+app.use(express.static(path.join(__dirname, 'public'), {
+  etag: true,
+  setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache'),
+}));
 
 app.listen(PORT, () => {
   console.log(`\n  Online Test Platform running at:  http://localhost:${PORT}\n`);

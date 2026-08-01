@@ -18,7 +18,7 @@
   <div class="container">
     <div class="tabs">
       <button class="tab active" data-tab="tests" onclick="showTab('tests')">My Tests</button>
-      <button class="tab" data-tab="create" onclick="showTab('create')">Create Test</button>
+      <button class="tab" data-tab="create" onclick="newTest()">Create Test</button>
       <button class="tab" data-tab="students" onclick="showTab('students')">Students</button>
     </div>
 
@@ -31,12 +31,30 @@
     <!-- ======================= CREATE TEST ======================= -->
     <section id="tab-create" class="hidden">
       <div class="card">
-        <h1>Create a new test</h1>
+        <h1 id="create-heading">Create a new test</h1>
+        <div id="edit-banner" class="msg hidden" style="background:#fef3c7;color:#92400e">
+          You are editing an existing test.
+        </div>
         <div id="create-msg" class="msg hidden"></div>
         <label>Test title</label>
         <input type="text" id="t-title" placeholder="e.g. Chapter 1 Quiz">
         <label>Description (optional)</label>
         <textarea id="t-desc" placeholder="Instructions for students..."></textarea>
+
+        <div class="q-card" style="margin-top:16px">
+          <label class="choice" style="font-weight:600">
+            <input type="checkbox" id="t-negmark" onchange="toggleNegMark()">
+            Enable negative marking (deduct marks for wrong answers)
+          </label>
+          <div id="penalty-wrap" class="hidden" style="margin-top:8px">
+            <label>Marks deducted per wrong answer</label>
+            <input type="number" id="t-penalty" value="1" min="1" step="1" style="width:120px">
+            <p class="muted" style="font-size:13px;margin:6px 0 0">
+              Applies to multiple-choice &amp; true/false only. Blank answers are never penalized.
+              A student's total can go negative (e.g. all-wrong could score below 0).
+            </p>
+          </div>
+        </div>
 
         <h2 style="margin-top:22px">Questions</h2>
         <div id="questions"></div>
@@ -45,7 +63,10 @@
           <button class="btn secondary small" onclick="addQuestion('truefalse')">+ True / False</button>
           <button class="btn secondary small" onclick="addQuestion('short')">+ Short answer</button>
         </div>
-        <div style="margin-top:22px"><button class="btn" onclick="saveTest()">Save test</button></div>
+        <div class="row" style="margin-top:22px">
+          <button class="btn" id="save-btn" onclick="saveTest()">Save test</button>
+          <button class="btn ghost hidden" id="cancel-edit-btn" onclick="resetCreateForm(); showTab('tests')">Cancel</button>
+        </div>
       </div>
     </section>
 
@@ -101,19 +122,21 @@
       tests.forEach((t) => {
         const item = el(`<div class="list-item">
           <div>
-            <h3>${escapeHtml(t.title)}</h3>
+            <h3>${escapeHtml(t.title)} ${t.negative_marking ? `<span class="pill amber">−${t.penalty} per wrong</span>` : ''}</h3>
             <div class="muted" style="font-size:13px">${t.question_count} question(s) · assigned to ${t.assigned_count} student(s)</div>
           </div>
           <div class="row"></div>
         </div>`);
         const actions = item.querySelector('.row');
+        const editBtn = el('<button class="btn secondary small">Edit</button>');
+        editBtn.onclick = () => startEdit(t);
         const assignBtn = el('<button class="btn small">Assign</button>');
         assignBtn.onclick = () => openAssign(t);
         const resultsBtn = el('<button class="btn secondary small">Results</button>');
         resultsBtn.onclick = () => openResults(t);
         const delBtn = el('<button class="btn danger small">Delete</button>');
         delBtn.onclick = () => deleteTest(t);
-        actions.append(assignBtn, resultsBtn, delBtn);
+        actions.append(editBtn, assignBtn, resultsBtn, delBtn);
         card.append(item);
       });
     }
@@ -247,9 +270,13 @@
       detail.scrollIntoView({ behavior: 'smooth' });
     }
 
-    // ---------------- CREATE TEST ----------------
+    // ---------------- CREATE / EDIT TEST ----------------
     let qSeq = 0;
-    function addQuestion(type) {
+    let editingTestId = null;  // null = creating; a test id = editing that test
+
+    // `data` (optional) pre-fills the question when editing:
+    // { prompt, options:[...], correct, points }
+    function addQuestion(type, data) {
       qSeq++;
       const id = 'q' + qSeq;
       const wrap = el(`<div class="q-card" id="${id}" data-type="${type}"></div>`);
@@ -259,38 +286,107 @@
         <button class="btn danger small" onclick="this.closest('.q-card').remove()">Remove</button>
       </div>`));
       wrap.append(el('<label>Question text</label>'));
-      wrap.append(el('<textarea class="q-prompt" placeholder="Type the question..."></textarea>'));
+      const prompt = el('<textarea class="q-prompt" placeholder="Type the question..."></textarea>');
+      if (data) prompt.value = data.prompt || '';
+      wrap.append(prompt);
 
       if (type === 'mcq') {
         const opts = el('<div class="q-options"></div>');
         wrap.append(el('<label>Choices (select the correct one)</label>'));
         wrap.append(opts);
-        for (let i = 0; i < 4; i++) opts.append(mcqOption(id, i));
+        const existing = data && Array.isArray(data.options) ? data.options : null;
+        const count = existing ? Math.max(existing.length, 2) : 4;
+        const correctIdx = data ? Number(data.correct) : 0;
+        for (let i = 0; i < count; i++)
+          opts.append(mcqOption(id, i, existing ? (existing[i] || '') : '', i === correctIdx));
         const add = el('<button class="btn ghost small" style="margin-top:6px">+ Add choice</button>');
-        add.onclick = () => opts.append(mcqOption(id, opts.children.length));
+        add.onclick = () => opts.append(mcqOption(id, opts.children.length, '', false));
         wrap.append(add);
       } else if (type === 'truefalse') {
         wrap.append(el('<label>Correct answer</label>'));
-        wrap.append(el(`<select class="q-correct"><option value="true">True</option><option value="false">False</option></select>`));
+        const sel = el(`<select class="q-correct"><option value="true">True</option><option value="false">False</option></select>`);
+        if (data) sel.value = String(data.correct);
+        wrap.append(sel);
       } else {
         wrap.append(el('<p class="muted" style="font-size:13px">Students type a written answer. You grade it later.</p>'));
       }
       wrap.append(el('<label>Points</label>'));
-      wrap.append(el('<input type="number" class="q-points" value="1" min="1" style="width:100px">'));
+      const pts = el('<input type="number" class="q-points" value="1" min="1" style="width:100px">');
+      if (data && data.points) pts.value = data.points;
+      wrap.append(pts);
       document.getElementById('questions').append(wrap);
     }
 
-    function mcqOption(qid, i) {
+    function mcqOption(qid, i, value = '', checked = false) {
       const row = el(`<div class="row" style="margin-bottom:6px">
-        <input type="radio" name="correct-${qid}" value="${i}" style="width:auto" ${i === 0 ? 'checked' : ''}>
+        <input type="radio" name="correct-${qid}" value="${i}" style="width:auto" ${checked ? 'checked' : ''}>
         <input type="text" class="q-opt" placeholder="Choice ${i + 1}" style="flex:1">
       </div>`);
+      row.querySelector('.q-opt').value = value;
       return row;
+    }
+
+    // Reset the builder back to a blank "create" state.
+    function resetCreateForm() {
+      editingTestId = null;
+      document.getElementById('t-title').value = '';
+      document.getElementById('t-desc').value = '';
+      document.getElementById('t-negmark').checked = false;
+      document.getElementById('t-penalty').value = 1;
+      toggleNegMark();
+      document.getElementById('questions').innerHTML = '';
+      addQuestion('mcq');
+      document.getElementById('create-heading').textContent = 'Create a new test';
+      document.getElementById('save-btn').textContent = 'Save test';
+      document.getElementById('edit-banner').classList.add('hidden');
+      document.getElementById('cancel-edit-btn').classList.add('hidden');
+      document.getElementById('create-msg').classList.add('hidden');
+    }
+
+    // "Create Test" tab always starts fresh.
+    function newTest() {
+      resetCreateForm();
+      showTab('create');
+    }
+
+    // Load an existing test into the builder for editing.
+    async function startEdit(t) {
+      const { test, questions } = await api('/api/tests/' + t.id);
+      resetCreateForm();
+      editingTestId = test.id;
+      document.getElementById('t-title').value = test.title;
+      document.getElementById('t-desc').value = test.description || '';
+      document.getElementById('t-negmark').checked = !!test.negative_marking;
+      document.getElementById('t-penalty').value = test.penalty > 0 ? test.penalty : 1;
+      toggleNegMark();
+      document.getElementById('questions').innerHTML = '';
+      questions.forEach((q) => addQuestion(q.type, {
+        prompt: q.prompt,
+        options: q.options,
+        correct: q.type === 'mcq' ? Number(q.correct_answer) : q.correct_answer,
+        points: q.points,
+      }));
+      document.getElementById('create-heading').textContent = 'Edit test';
+      document.getElementById('save-btn').textContent = 'Update test';
+      const banner = document.getElementById('edit-banner');
+      banner.classList.remove('hidden');
+      banner.textContent = t.submitted_count > 0
+        ? `Note: ${t.submitted_count} student(s) already submitted this test. Saving changes will clear their results so scores stay consistent with the new questions.`
+        : 'You are editing an existing test.';
+      document.getElementById('cancel-edit-btn').classList.remove('hidden');
+      showTab('create');
+    }
+
+    function toggleNegMark() {
+      const on = document.getElementById('t-negmark').checked;
+      document.getElementById('penalty-wrap').classList.toggle('hidden', !on);
     }
 
     async function saveTest() {
       const title = document.getElementById('t-title').value.trim();
       const description = document.getElementById('t-desc').value.trim();
+      const negativeMarking = document.getElementById('t-negmark').checked;
+      const penalty = Number(document.getElementById('t-penalty').value) || 1;
       const questions = [];
       for (const wrap of document.querySelectorAll('#questions .q-card')) {
         const type = wrap.dataset.type;
@@ -316,15 +412,20 @@
         questions.push(q);
       }
       try {
-        await api('/api/tests', 'POST', { title, description, questions });
-        // reset form
-        document.getElementById('t-title').value = '';
-        document.getElementById('t-desc').value = '';
-        document.getElementById('questions').innerHTML = '';
-        addQuestion('mcq');
-        showMsg('create-msg', 'Test saved! See it under "My Tests".', 'ok');
+        if (editingTestId) {
+          const r = await api('/api/tests/' + editingTestId, 'PUT', { title, description, questions, negativeMarking, penalty });
+          let note = 'Test updated! See it under "My Tests".';
+          if (r.clearedAttempts > 0)
+            note += ` ${r.clearedAttempts} earlier submission(s) were cleared because the questions changed.`;
+          resetCreateForm();
+          showMsg('create-msg', note, 'ok');
+        } else {
+          await api('/api/tests', 'POST', { title, description, questions, negativeMarking, penalty });
+          resetCreateForm();
+          showMsg('create-msg', 'Test saved! See it under "My Tests".', 'ok');
+        }
         loadTests();
-        setTimeout(() => showTab('tests'), 800);
+        setTimeout(() => showTab('tests'), 1000);
       } catch (err) { showMsg('create-msg', err.message); }
     }
 
