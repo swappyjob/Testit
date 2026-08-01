@@ -1,6 +1,7 @@
 import express from 'express';
 import crypto from 'node:crypto';
 import path from 'node:path';
+import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import db from './db.js';
 
@@ -8,7 +9,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(express.json());
+// Larger limit so base64-encoded question images fit in the JSON body.
+app.use(express.json({ limit: '8mb' }));
+
+// Folder where uploaded question images are stored and served from.
+const UPLOAD_DIR = path.join(__dirname, 'public', 'uploads');
+fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 // --- Password helpers (scrypt, built into Node — no dependency) --------------
 function hashPassword(password) {
@@ -128,7 +134,11 @@ app.get('/api/me', (req, res) => {
 app.post('/api/students', requireAuth('teacher'), (req, res) => {
   const name = (req.body.name || '').trim();
   const email = (req.body.email || '').trim().toLowerCase();
+  const phone = (req.body.phone || '').trim();
   if (!name || !email) return res.status(400).json({ error: 'Student name and email are required.' });
+  if (!phone) return res.status(400).json({ error: 'Student phone number is required.' });
+  if (!/^[\d+()\-\s]{6,20}$/.test(phone))
+    return res.status(400).json({ error: 'Please enter a valid phone number.' });
   if (db.prepare('SELECT id FROM users WHERE email = ?').get(email))
     return res.status(409).json({ error: 'A user with that email already exists.' });
   const openToken = db.prepare('SELECT id FROM signup_tokens WHERE email = ? AND used = 0').get(email);
@@ -136,20 +146,21 @@ app.post('/api/students', requireAuth('teacher'), (req, res) => {
 
   const token = randomToken();
   db.prepare(
-    'INSERT INTO signup_tokens (token, name, email, teacher_id) VALUES (?, ?, ?, ?)'
-  ).run(token, name, email, req.user.id);
+    'INSERT INTO signup_tokens (token, name, email, phone, teacher_id) VALUES (?, ?, ?, ?, ?)'
+  ).run(token, name, email, phone, req.user.id);
   res.json({ token, signupPath: `/signup.html?token=${token}` });
 });
 
 // List this teacher's students + pending invites.
 app.get('/api/students', requireAuth('teacher'), (req, res) => {
   const invites = db.prepare(
-    `SELECT t.name, t.email, t.token, t.used, t.student_id
+    `SELECT t.name, t.email, t.phone, t.token, t.used, t.student_id
        FROM signup_tokens t WHERE t.teacher_id = ? ORDER BY t.created_at DESC`
   ).all(req.user.id);
   const students = invites.map((i) => ({
     name: i.name,
     email: i.email,
+    phone: i.phone,
     signedUp: !!i.used,
     studentId: i.student_id,
     signupPath: i.used ? null : `/signup.html?token=${i.token}`,
@@ -176,8 +187,8 @@ app.post('/api/signup/:token', (req, res) => {
     return res.status(409).json({ error: 'An account with that email already exists.' });
 
   const info = db.prepare(
-    'INSERT INTO users (role, name, email, password_hash) VALUES (?, ?, ?, ?)'
-  ).run('student', t.name, t.email, hashPassword(password));
+    'INSERT INTO users (role, name, email, phone, password_hash) VALUES (?, ?, ?, ?, ?)'
+  ).run('student', t.name, t.email, t.phone, hashPassword(password));
   const studentId = Number(info.lastInsertRowid);
   db.prepare('UPDATE signup_tokens SET used = 1, student_id = ? WHERE id = ?').run(studentId, t.id);
   startSession(res, studentId);
@@ -207,10 +218,15 @@ function validateQuestions(questions) {
 }
 
 // Insert the given questions for a test (assumes the test has no questions yet).
+// Only accept image URLs we produced (paths under /uploads/), never arbitrary URLs.
+function safeImageUrl(url) {
+  return typeof url === 'string' && /^\/uploads\/[\w.-]+$/.test(url) ? url : '';
+}
+
 function writeQuestions(testId, questions) {
   const insertQ = db.prepare(
-    `INSERT INTO questions (test_id, type, prompt, options_json, correct_answer, points, position)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO questions (test_id, type, prompt, options_json, correct_answer, image_url, points, position)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
   );
   questions.forEach((q, idx) => {
     let options = '[]';
@@ -222,9 +238,24 @@ function writeQuestions(testId, questions) {
       correct = String(q.correct);
     }
     const points = Number(q.points) > 0 ? Number(q.points) : 1;
-    insertQ.run(testId, q.type, q.prompt.trim(), options, correct, points, idx);
+    insertQ.run(testId, q.type, q.prompt.trim(), options, correct, safeImageUrl(q.image), points, idx);
   });
 }
+
+// Accepts a base64 data URL, saves it as an image file, returns its public URL.
+const IMAGE_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
+app.post('/api/upload', requireAuth('teacher'), (req, res) => {
+  const dataUrl = req.body.dataUrl || '';
+  const m = /^data:([^;]+);base64,(.+)$/s.exec(dataUrl);
+  if (!m) return res.status(400).json({ error: 'Invalid image data.' });
+  const ext = IMAGE_EXT[m[1].toLowerCase()];
+  if (!ext) return res.status(400).json({ error: 'Only PNG, JPG, GIF, or WebP images are allowed.' });
+  const buf = Buffer.from(m[2], 'base64');
+  if (buf.length > 5 * 1024 * 1024) return res.status(413).json({ error: 'Image must be 5 MB or smaller.' });
+  const name = crypto.randomBytes(16).toString('hex') + '.' + ext;
+  fs.writeFileSync(path.join(UPLOAD_DIR, name), buf);
+  res.json({ url: '/uploads/' + name });
+});
 
 // Normalize the negative-marking settings from a request body.
 function readMarking(body) {
@@ -377,9 +408,9 @@ app.get('/api/take/:assignmentId', requireAuth('student'), (req, res) => {
     return res.status(409).json({ error: 'You have already submitted this test.' });
 
   const test = db.prepare('SELECT id, title, description, negative_marking, penalty FROM tests WHERE id = ?').get(a.test_id);
-  const questions = db.prepare('SELECT id, type, prompt, options_json, points FROM questions WHERE test_id = ? ORDER BY position')
+  const questions = db.prepare('SELECT id, type, prompt, options_json, image_url, points FROM questions WHERE test_id = ? ORDER BY position')
     .all(a.test_id)
-    .map((q) => ({ id: q.id, type: q.type, prompt: q.prompt, points: q.points, options: JSON.parse(q.options_json) }));
+    .map((q) => ({ id: q.id, type: q.type, prompt: q.prompt, points: q.points, image: q.image_url, options: JSON.parse(q.options_json) }));
   res.json({ test, questions });
 });
 
@@ -468,7 +499,7 @@ app.get('/api/attempts/:attemptId', requireAuth('teacher'), (req, res) => {
   if (!attempt) return res.status(404).json({ error: 'Attempt not found.' });
   const items = db.prepare(
     `SELECT ans.id AS answer_id, ans.response, ans.is_correct, ans.points_awarded,
-            q.id AS question_id, q.type, q.prompt, q.options_json, q.correct_answer, q.points
+            q.id AS question_id, q.type, q.prompt, q.options_json, q.correct_answer, q.image_url, q.points
        FROM answers ans JOIN questions q ON q.id = ans.question_id
       WHERE ans.attempt_id = ? ORDER BY q.position`
   ).all(attempt.id).map((r) => ({
@@ -481,6 +512,7 @@ app.get('/api/attempts/:attemptId', requireAuth('teacher'), (req, res) => {
     prompt: r.prompt,
     options: JSON.parse(r.options_json),
     correctAnswer: r.correct_answer,
+    image: r.image_url,
     points: r.points,
   }));
   res.json({

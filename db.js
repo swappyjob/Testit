@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS users (
   role          TEXT NOT NULL CHECK (role IN ('teacher', 'student')),
   name          TEXT NOT NULL,
   email         TEXT NOT NULL UNIQUE,
+  phone         TEXT NOT NULL DEFAULT '',
   password_hash TEXT NOT NULL,
   created_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -28,6 +29,7 @@ CREATE TABLE IF NOT EXISTS signup_tokens (
   token       TEXT NOT NULL UNIQUE,
   name        TEXT NOT NULL,
   email       TEXT NOT NULL,
+  phone       TEXT NOT NULL DEFAULT '',
   teacher_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   used        INTEGER NOT NULL DEFAULT 0,
   student_id  INTEGER REFERENCES users(id) ON DELETE SET NULL,
@@ -51,6 +53,7 @@ CREATE TABLE IF NOT EXISTS questions (
   prompt         TEXT NOT NULL,
   options_json   TEXT NOT NULL DEFAULT '[]',  -- array of choices for mcq
   correct_answer TEXT NOT NULL DEFAULT '',    -- index for mcq, 'true'/'false', '' for short
+  image_url      TEXT NOT NULL DEFAULT '',    -- optional image attached to the question
   points         INTEGER NOT NULL DEFAULT 1,
   position       INTEGER NOT NULL DEFAULT 0
 );
@@ -103,5 +106,8 @@ function ensureColumn(table, column, definition) {
 }
 ensureColumn('tests', 'negative_marking', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('tests', 'penalty', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('questions', 'image_url', "TEXT NOT NULL DEFAULT ''");
+ensureColumn('users', 'phone', "TEXT NOT NULL DEFAULT ''");
+ensureColumn('signup_tokens', 'phone', "TEXT NOT NULL DEFAULT ''");
 
 export default db;

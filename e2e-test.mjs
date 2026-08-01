@@ -52,7 +52,7 @@ ok('test created (id ' + testId + ')');
 
 // 3. Teacher creates a student -> signup link
 const { token } = await call(teacher, '/api/students', 'POST', {
-  name: 'Rahul', email: `student${rand}@example.com`,
+  name: 'Rahul', email: `student${rand}@example.com`, phone: '+91 90000 00001',
 });
 ok('student created, signup token issued');
 

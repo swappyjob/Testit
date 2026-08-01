@@ -79,6 +79,7 @@
         <div class="grid two">
           <div><label>Student name</label><input type="text" id="s-name"></div>
           <div><label>Student email</label><input type="email" id="s-email"></div>
+          <div><label>Phone number</label><input type="tel" id="s-phone" placeholder="e.g. +91 98765 43210"></div>
         </div>
         <div style="margin-top:16px"><button class="btn" onclick="addStudent()">Create student & get link</button></div>
       </div>
@@ -232,6 +233,7 @@
       let hasShort = false;
       items.forEach((it, i) => {
         const q = el(`<div class="q-card"><h3>Q${i + 1}. ${escapeHtml(it.prompt)} <span class="muted">(${it.points} pt)</span></h3></div>`);
+        if (it.image) q.append(el(`<img src="${it.image}" style="max-width:280px;max-height:200px;border:1px solid var(--line);border-radius:8px;display:block;margin-bottom:10px">`));
         if (it.type === 'mcq') {
           const chosen = it.response === '' ? '—' : escapeHtml(it.options[Number(it.response)] ?? it.response);
           const correct = escapeHtml(it.options[Number(it.correctAnswer)] ?? it.correctAnswer);
@@ -289,6 +291,7 @@
       const prompt = el('<textarea class="q-prompt" placeholder="Type the question..."></textarea>');
       if (data) prompt.value = data.prompt || '';
       wrap.append(prompt);
+      attachImageUploader(wrap, data && data.image);
 
       if (type === 'mcq') {
         const opts = el('<div class="q-options"></div>');
@@ -324,6 +327,48 @@
       </div>`);
       row.querySelector('.q-opt').value = value;
       return row;
+    }
+
+    // Adds an optional image uploader to a question card. Stores the uploaded
+    // URL in a hidden .q-image-url input that saveTest reads.
+    function attachImageUploader(wrap, initialUrl) {
+      wrap.append(el('<label>Image (optional)</label>'));
+      const hidden = el('<input type="hidden" class="q-image-url">');
+      hidden.value = initialUrl || '';
+      const file = el('<input type="file" class="q-image-file" accept="image/png,image/jpeg,image/gif,image/webp">');
+      const preview = el('<div class="q-image-preview" style="margin-top:8px"></div>');
+      wrap.append(hidden, file, preview);
+
+      function render() {
+        preview.innerHTML = '';
+        if (hidden.value) {
+          preview.append(el(`<img src="${hidden.value}" style="max-width:240px;max-height:180px;border:1px solid var(--line);border-radius:8px;display:block">`));
+          const rm = el('<button type="button" class="btn danger small" style="margin-top:6px">Remove image</button>');
+          rm.onclick = () => { hidden.value = ''; file.value = ''; render(); };
+          preview.append(rm);
+          file.classList.add('hidden');
+        } else {
+          file.classList.remove('hidden');
+        }
+      }
+
+      file.addEventListener('change', async () => {
+        const f = file.files[0];
+        if (!f) return;
+        if (f.size > 5 * 1024 * 1024) { alert('Image must be 5 MB or smaller.'); file.value = ''; return; }
+        try {
+          const dataUrl = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result);
+            reader.onerror = () => reject(new Error('Could not read the file.'));
+            reader.readAsDataURL(f);
+          });
+          const { url } = await api('/api/upload', 'POST', { dataUrl });
+          hidden.value = url;
+          render();
+        } catch (err) { alert(err.message); file.value = ''; }
+      });
+      render();
     }
 
     // Reset the builder back to a blank "create" state.
@@ -364,6 +409,7 @@
         prompt: q.prompt,
         options: q.options,
         correct: q.type === 'mcq' ? Number(q.correct_answer) : q.correct_answer,
+        image: q.image_url,
         points: q.points,
       }));
       document.getElementById('create-heading').textContent = 'Edit test';
@@ -392,7 +438,8 @@
         const type = wrap.dataset.type;
         const prompt = wrap.querySelector('.q-prompt').value.trim();
         const points = Number(wrap.querySelector('.q-points').value) || 1;
-        const q = { type, prompt, points };
+        const image = wrap.querySelector('.q-image-url').value;
+        const q = { type, prompt, points, image };
         if (type === 'mcq') {
           q.options = [...wrap.querySelectorAll('.q-opt')].map((o) => o.value);
           const checked = wrap.querySelector('input[type=radio]:checked');
@@ -433,10 +480,12 @@
     async function addStudent() {
       const name = document.getElementById('s-name').value.trim();
       const email = document.getElementById('s-email').value.trim();
+      const phone = document.getElementById('s-phone').value.trim();
       try {
-        await api('/api/students', 'POST', { name, email });
+        await api('/api/students', 'POST', { name, email, phone });
         document.getElementById('s-name').value = '';
         document.getElementById('s-email').value = '';
+        document.getElementById('s-phone').value = '';
         showMsg('student-msg', 'Student created! Copy their signup link below and send it to them.', 'ok');
         loadStudents();
       } catch (err) { showMsg('student-msg', err.message); }
@@ -450,7 +499,7 @@
       students.forEach((s) => {
         const item = el(`<div class="list-item" style="display:block">
           <div class="row" style="justify-content:space-between">
-            <div><h3>${escapeHtml(s.name)}</h3><div class="muted" style="font-size:13px">${escapeHtml(s.email)}</div></div>
+            <div><h3>${escapeHtml(s.name)}</h3><div class="muted" style="font-size:13px">${escapeHtml(s.email)}${s.phone ? ' · ' + escapeHtml(s.phone) : ''}</div></div>
             ${s.signedUp ? '<span class="pill green">signed up</span>' : '<span class="pill amber">invite pending</span>'}
           </div>
         </div>`);

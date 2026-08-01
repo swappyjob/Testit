@@ -76,6 +76,7 @@
         const card = el(`<div class="q-card">
           <h3>Q${i + 1}. ${escapeHtml(q.prompt)} <span class="muted">(${q.points} pt)</span></h3>
         </div>`);
+        if (q.image) card.append(el(`<img src="${q.image}" style="max-width:100%;max-height:260px;border:1px solid var(--line);border-radius:8px;display:block;margin-bottom:10px">`));
         if (q.type === 'mcq') {
           q.options.forEach((opt, idx) => {
             card.append(el(`<label class="choice">

@@ -36,7 +36,7 @@ const { id: testId } = await call(teacher, '/api/tests', 'POST', {
 ok('created test');
 
 // Student submits it
-const { token } = await call(teacher, '/api/students', 'POST', { name: 'S', email: `s${rand}@x.com` });
+const { token } = await call(teacher, '/api/students', 'POST', { name: 'S', email: `s${rand}@x.com`, phone: '9000000002' });
 const { user: su } = await call(student, '/api/signup/' + token, 'POST', { password: 'pass123' });
 await call(teacher, '/api/assignments', 'POST', { test_id: testId, student_ids: [su.id] });
 const { assignments } = await call(student, '/api/my-assignments');

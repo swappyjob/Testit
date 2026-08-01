@@ -25,7 +25,7 @@ const ok = (l) => console.log('  ✓ ' + l);
 const rand = Math.floor(Math.random() * 1e6);
 
 async function makeStudentAndTake(teacher, testId, name, email, answers) {
-  const { token } = await call(teacher, '/api/students', 'POST', { name, email });
+  const { token } = await call(teacher, '/api/students', 'POST', { name, email, phone: '9000000009' });
   const student = makeJar();
   const { user } = await call(student, '/api/signup/' + token, 'POST', { password: 'pass123' });
   await call(teacher, '/api/assignments', 'POST', { test_id: testId, student_ids: [user.id] });
