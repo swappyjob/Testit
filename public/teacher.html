@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Teacher Dashboard</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <div class="topbar">
+    <a class="brand" href="/teacher.html">📝 Test<span>Platform</span></a>
+    <div class="row">
+      <span class="user" id="who"></span>
+      <button class="btn ghost small" onclick="logout()">Log out</button>
+    </div>
+  </div>
+
+  <div class="container">
+    <div class="tabs">
+      <button class="tab active" data-tab="tests" onclick="showTab('tests')">My Tests</button>
+      <button class="tab" data-tab="create" onclick="showTab('create')">Create Test</button>
+      <button class="tab" data-tab="students" onclick="showTab('students')">Students</button>
+    </div>
+
+    <!-- ======================= MY TESTS ======================= -->
+    <section id="tab-tests">
+      <div id="tests-list"></div>
+      <div id="detail"></div>
+    </section>
+
+    <!-- ======================= CREATE TEST ======================= -->
+    <section id="tab-create" class="hidden">
+      <div class="card">
+        <h1>Create a new test</h1>
+        <div id="create-msg" class="msg hidden"></div>
+        <label>Test title</label>
+        <input type="text" id="t-title" placeholder="e.g. Chapter 1 Quiz">
+        <label>Description (optional)</label>
+        <textarea id="t-desc" placeholder="Instructions for students..."></textarea>
+
+        <h2 style="margin-top:22px">Questions</h2>
+        <div id="questions"></div>
+        <div class="row">
+          <button class="btn secondary small" onclick="addQuestion('mcq')">+ Multiple choice</button>
+          <button class="btn secondary small" onclick="addQuestion('truefalse')">+ True / False</button>
+          <button class="btn secondary small" onclick="addQuestion('short')">+ Short answer</button>
+        </div>
+        <div style="margin-top:22px"><button class="btn" onclick="saveTest()">Save test</button></div>
+      </div>
+    </section>
+
+    <!-- ======================= STUDENTS ======================= -->
+    <section id="tab-students" class="hidden">
+      <div class="card">
+        <h1>Add a student</h1>
+        <p class="muted">Create a student, then copy their unique signup link and send it to them.</p>
+        <div id="student-msg" class="msg hidden"></div>
+        <div class="grid two">
+          <div><label>Student name</label><input type="text" id="s-name"></div>
+          <div><label>Student email</label><input type="email" id="s-email"></div>
+        </div>
+        <div style="margin-top:16px"><button class="btn" onclick="addStudent()">Create student & get link</button></div>
+      </div>
+      <div class="card">
+        <h2>Your students</h2>
+        <div id="students-list"></div>
+      </div>
+    </section>
+  </div>
+
+  <script src="/js/app.js"></script>
+  <script>
+    let ME = null;
+    (async () => {
+      ME = await requireRole('teacher', '/teacher-login.html');
+      if (!ME) return;
+      document.getElementById('who').textContent = ME.name + ' · Teacher';
+      loadTests();
+      loadStudents();
+      addQuestion('mcq');
+    })();
+
+    function showTab(name) {
+      for (const s of ['tests', 'create', 'students'])
+        document.getElementById('tab-' + s).classList.toggle('hidden', s !== name);
+      document.querySelectorAll('.tab').forEach((t) =>
+        t.classList.toggle('active', t.dataset.tab === name));
+      document.getElementById('detail').innerHTML = '';
+    }
+
+    // ---------------- MY TESTS ----------------
+    async function loadTests() {
+      const { tests } = await api('/api/tests');
+      const box = document.getElementById('tests-list');
+      if (tests.length === 0) {
+        box.innerHTML = '<div class="card"><h1>My Tests</h1><p class="muted">No tests yet. Go to <b>Create Test</b> to make your first one.</p></div>';
+        return;
+      }
+      box.innerHTML = '<div class="card"><h1>My Tests</h1></div>';
+      const card = box.querySelector('.card');
+      tests.forEach((t) => {
+        const item = el(`<div class="list-item">
+          <div>
+            <h3>${escapeHtml(t.title)}</h3>
+            <div class="muted" style="font-size:13px">${t.question_count} question(s) · assigned to ${t.assigned_count} student(s)</div>
+          </div>
+          <div class="row"></div>
+        </div>`);
+        const actions = item.querySelector('.row');
+        const assignBtn = el('<button class="btn small">Assign</button>');
+        assignBtn.onclick = () => openAssign(t);
+        const resultsBtn = el('<button class="btn secondary small">Results</button>');
+        resultsBtn.onclick = () => openResults(t);
+        const delBtn = el('<button class="btn danger small">Delete</button>');
+        delBtn.onclick = () => deleteTest(t);
+        actions.append(assignBtn, resultsBtn, delBtn);
+        card.append(item);
+      });
+    }
+
+    async function deleteTest(t) {
+      if (!confirm(`Delete "${t.title}"? This removes its questions and results.`)) return;
+      await api('/api/tests/' + t.id, 'DELETE');
+      loadTests();
+      document.getElementById('detail').innerHTML = '';
+    }
+
+    // ---------------- ASSIGN ----------------
+    async function openAssign(t) {
+      const detail = document.getElementById('detail');
+      const [{ students }, { assigned }] = await Promise.all([
+        api('/api/students'),
+        api('/api/tests/' + t.id + '/assignments'),
+      ]);
+      const signedUp = students.filter((s) => s.signedUp && s.studentId);
+      const assignedIds = new Set(assigned.map((a) => a.student_id));
+      if (signedUp.length === 0) {
+        detail.innerHTML = `<div class="card"><h2>Assign "${escapeHtml(t.title)}"</h2>
+          <p class="muted">No students have signed up yet. Add students and share their signup links first.</p></div>`;
+        return;
+      }
+      const card = el(`<div class="card"><h2>Assign "${escapeHtml(t.title)}"</h2>
+        <p class="muted">Tick the students who should take this test.</p><div id="assign-list"></div>
+        <div style="margin-top:16px"><button class="btn" id="assign-go">Assign to selected</button></div>
+        <div id="assign-msg" class="msg hidden"></div></div>`);
+      const list = card.querySelector('#assign-list');
+      signedUp.forEach((s) => {
+        const done = assignedIds.has(s.studentId);
+        const line = el(`<label class="choice">
+          <input type="checkbox" value="${s.studentId}" ${done ? 'checked disabled' : ''}>
+          ${escapeHtml(s.name)} <span class="muted">(${escapeHtml(s.email)})</span>
+          ${done ? '<span class="pill green">already assigned</span>' : ''}
+        </label>`);
+        list.append(line);
+      });
+      card.querySelector('#assign-go').onclick = async () => {
+        const ids = [...list.querySelectorAll('input:checked:not([disabled])')].map((c) => Number(c.value));
+        if (ids.length === 0) { showMsg('assign-msg', 'Select at least one student.'); return; }
+        const { assigned } = await api('/api/assignments', 'POST', { test_id: t.id, student_ids: ids });
+        showMsg('assign-msg', `Assigned to ${assigned} student(s).`, 'ok');
+        loadTests();
+        setTimeout(() => openAssign(t), 700);
+      };
+      detail.innerHTML = '';
+      detail.append(card);
+      detail.scrollIntoView({ behavior: 'smooth' });
+    }
+
+    // ---------------- RESULTS + GRADING ----------------
+    async function openResults(t) {
+      const detail = document.getElementById('detail');
+      const { results } = await api('/api/tests/' + t.id + '/results');
+      const card = el(`<div class="card"><h2>Results — "${escapeHtml(t.title)}"</h2></div>`);
+      if (results.length === 0) {
+        card.append(el('<p class="muted">No students have submitted this test yet.</p>'));
+      } else {
+        const table = el(`<table><thead><tr><th>Student</th><th>Score</th><th>Status</th><th></th></tr></thead><tbody></tbody></table>`);
+        const tb = table.querySelector('tbody');
+        results.forEach((r) => {
+          const tr = el(`<tr>
+            <td>${escapeHtml(r.name)}<div class="muted" style="font-size:12px">${escapeHtml(r.email)}</div></td>
+            <td><b>${r.score}</b> / ${r.maxScore}</td>
+            <td>${r.needsGrading ? '<span class="pill amber">needs grading</span>' : '<span class="pill green">graded</span>'}</td>
+            <td></td>
+          </tr>`);
+          const btn = el('<button class="btn secondary small">View / Grade</button>');
+          btn.onclick = () => openAttempt(r.attemptId, t);
+          tr.lastElementChild.append(btn);
+          tb.append(tr);
+        });
+        card.append(table);
+      }
+      detail.innerHTML = '';
+      detail.append(card);
+      detail.scrollIntoView({ behavior: 'smooth' });
+    }
+
+    async function openAttempt(attemptId, t) {
+      const detail = document.getElementById('detail');
+      const { attempt, items } = await api('/api/attempts/' + attemptId);
+      const card = el(`<div class="card">
+        <h2>${escapeHtml(attempt.name)} — ${escapeHtml(t.title)}</h2>
+        <p class="muted">Score: <b>${attempt.autoScore + attempt.manualScore}</b> / ${attempt.maxScore}
+        ${attempt.needsGrading ? ' · <span class="pill amber">has answers to grade</span>' : ''}</p>
+        <div id="grade-msg" class="msg hidden"></div>
+        <div id="items"></div>
+      </div>`);
+      const box = card.querySelector('#items');
+      let hasShort = false;
+      items.forEach((it, i) => {
+        const q = el(`<div class="q-card"><h3>Q${i + 1}. ${escapeHtml(it.prompt)} <span class="muted">(${it.points} pt)</span></h3></div>`);
+        if (it.type === 'mcq') {
+          const chosen = it.response === '' ? '—' : escapeHtml(it.options[Number(it.response)] ?? it.response);
+          const correct = escapeHtml(it.options[Number(it.correctAnswer)] ?? it.correctAnswer);
+          q.append(el(`<div>Answered: <b>${chosen}</b> ${it.isCorrect ? '<span class="pill green">correct</span>' : '<span class="pill gray">wrong</span>'}<br>
+            <span class="muted">Correct answer: ${correct}</span></div>`));
+        } else if (it.type === 'truefalse') {
+          q.append(el(`<div>Answered: <b>${it.response === '' ? '—' : escapeHtml(it.response)}</b>
+            ${it.isCorrect ? '<span class="pill green">correct</span>' : '<span class="pill gray">wrong</span>'}<br>
+            <span class="muted">Correct answer: ${escapeHtml(it.correctAnswer)}</span></div>`));
+        } else {
+          hasShort = true;
+          q.append(el(`<div><span class="muted">Student wrote:</span><br><div style="padding:8px 0"><b>${it.response ? escapeHtml(it.response) : '<span class="muted">(blank)</span>'}</b></div></div>`));
+          const grade = el(`<div class="row"><label style="margin:0">Points:</label>
+            <input type="number" min="0" max="${it.points}" value="${it.pointsAwarded}" style="width:90px" data-answer="${it.answerId}">
+            <span class="muted">/ ${it.points} ${it.isCorrect === null ? '<span class="pill amber">ungraded</span>' : ''}</span></div>`);
+          q.append(grade);
+        }
+        box.append(q);
+      });
+      if (hasShort) {
+        const save = el('<div style="margin-top:16px"><button class="btn">Save grades</button></div>');
+        save.querySelector('button').onclick = async () => {
+          const grades = {};
+          box.querySelectorAll('input[data-answer]').forEach((inp) => { grades[inp.dataset.answer] = Number(inp.value); });
+          await api('/api/attempts/' + attemptId + '/grade', 'POST', { grades });
+          showMsg('grade-msg', 'Grades saved!', 'ok');
+          setTimeout(() => openAttempt(attemptId, t), 700);
+        };
+        card.append(save);
+      }
+      const back = el('<div style="margin-top:12px"><button class="btn ghost small">← Back to results</button></div>');
+      back.querySelector('button').onclick = () => openResults(t);
+      card.append(back);
+      detail.innerHTML = '';
+      detail.append(card);
+      detail.scrollIntoView({ behavior: 'smooth' });
+    }
+
+    // ---------------- CREATE TEST ----------------
+    let qSeq = 0;
+    function addQuestion(type) {
+      qSeq++;
+      const id = 'q' + qSeq;
+      const wrap = el(`<div class="q-card" id="${id}" data-type="${type}"></div>`);
+      const typeLabel = { mcq: 'Multiple choice', truefalse: 'True / False', short: 'Short answer' }[type];
+      wrap.append(el(`<div class="row" style="justify-content:space-between">
+        <span class="pill brand">${typeLabel}</span>
+        <button class="btn danger small" onclick="this.closest('.q-card').remove()">Remove</button>
+      </div>`));
+      wrap.append(el('<label>Question text</label>'));
+      wrap.append(el('<textarea class="q-prompt" placeholder="Type the question..."></textarea>'));
+
+      if (type === 'mcq') {
+        const opts = el('<div class="q-options"></div>');
+        wrap.append(el('<label>Choices (select the correct one)</label>'));
+        wrap.append(opts);
+        for (let i = 0; i < 4; i++) opts.append(mcqOption(id, i));
+        const add = el('<button class="btn ghost small" style="margin-top:6px">+ Add choice</button>');
+        add.onclick = () => opts.append(mcqOption(id, opts.children.length));
+        wrap.append(add);
+      } else if (type === 'truefalse') {
+        wrap.append(el('<label>Correct answer</label>'));
+        wrap.append(el(`<select class="q-correct"><option value="true">True</option><option value="false">False</option></select>`));
+      } else {
+        wrap.append(el('<p class="muted" style="font-size:13px">Students type a written answer. You grade it later.</p>'));
+      }
+      wrap.append(el('<label>Points</label>'));
+      wrap.append(el('<input type="number" class="q-points" value="1" min="1" style="width:100px">'));
+      document.getElementById('questions').append(wrap);
+    }
+
+    function mcqOption(qid, i) {
+      const row = el(`<div class="row" style="margin-bottom:6px">
+        <input type="radio" name="correct-${qid}" value="${i}" style="width:auto" ${i === 0 ? 'checked' : ''}>
+        <input type="text" class="q-opt" placeholder="Choice ${i + 1}" style="flex:1">
+      </div>`);
+      return row;
+    }
+
+    async function saveTest() {
+      const title = document.getElementById('t-title').value.trim();
+      const description = document.getElementById('t-desc').value.trim();
+      const questions = [];
+      for (const wrap of document.querySelectorAll('#questions .q-card')) {
+        const type = wrap.dataset.type;
+        const prompt = wrap.querySelector('.q-prompt').value.trim();
+        const points = Number(wrap.querySelector('.q-points').value) || 1;
+        const q = { type, prompt, points };
+        if (type === 'mcq') {
+          q.options = [...wrap.querySelectorAll('.q-opt')].map((o) => o.value);
+          const checked = wrap.querySelector('input[type=radio]:checked');
+          // correct index must map to the non-empty option list the server keeps
+          const rawOptions = [...wrap.querySelectorAll('.q-opt')].map((o) => o.value);
+          const chosenRaw = checked ? Number(checked.value) : -1;
+          const kept = [];
+          let correct = -1;
+          rawOptions.forEach((v, idx) => {
+            if (v.trim() !== '') { if (idx === chosenRaw) correct = kept.length; kept.push(v); }
+          });
+          q.options = kept;
+          q.correct = correct;
+        } else if (type === 'truefalse') {
+          q.correct = wrap.querySelector('.q-correct').value;
+        }
+        questions.push(q);
+      }
+      try {
+        await api('/api/tests', 'POST', { title, description, questions });
+        // reset form
+        document.getElementById('t-title').value = '';
+        document.getElementById('t-desc').value = '';
+        document.getElementById('questions').innerHTML = '';
+        addQuestion('mcq');
+        showMsg('create-msg', 'Test saved! See it under "My Tests".', 'ok');
+        loadTests();
+        setTimeout(() => showTab('tests'), 800);
+      } catch (err) { showMsg('create-msg', err.message); }
+    }
+
+    // ---------------- STUDENTS ----------------
+    async function addStudent() {
+      const name = document.getElementById('s-name').value.trim();
+      const email = document.getElementById('s-email').value.trim();
+      try {
+        await api('/api/students', 'POST', { name, email });
+        document.getElementById('s-name').value = '';
+        document.getElementById('s-email').value = '';
+        showMsg('student-msg', 'Student created! Copy their signup link below and send it to them.', 'ok');
+        loadStudents();
+      } catch (err) { showMsg('student-msg', err.message); }
+    }
+
+    async function loadStudents() {
+      const { students } = await api('/api/students');
+      const box = document.getElementById('students-list');
+      if (students.length === 0) { box.innerHTML = '<p class="muted">No students yet.</p>'; return; }
+      box.innerHTML = '';
+      students.forEach((s) => {
+        const item = el(`<div class="list-item" style="display:block">
+          <div class="row" style="justify-content:space-between">
+            <div><h3>${escapeHtml(s.name)}</h3><div class="muted" style="font-size:13px">${escapeHtml(s.email)}</div></div>
+            ${s.signedUp ? '<span class="pill green">signed up</span>' : '<span class="pill amber">invite pending</span>'}
+          </div>
+        </div>`);
+        if (!s.signedUp) {
+          const link = location.origin + s.signupPath;
+          const cb = el(`<div class="copybox">
+            <input type="text" readonly value="${link}">
+            <button class="btn secondary small">Copy link</button>
+          </div>`);
+          cb.querySelector('button').onclick = () => {
+            navigator.clipboard.writeText(link);
+            cb.querySelector('button').textContent = 'Copied!';
+          };
+          item.append(cb);
+        }
+        box.append(item);
+      });
+    }
+  </script>
+</body>
+</html>

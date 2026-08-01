@@ -1,0 +1,13 @@
+{
+  "name": "online-test-platform",
+  "version": "1.0.0",
+  "description": "A simple platform where teachers create tests and students take them online.",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}

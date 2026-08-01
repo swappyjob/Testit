@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Online Test Platform</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <div class="hero">
+    <h1>📝 Online Test Platform</h1>
+    <p class="muted">Teachers create tests. Students take them online.</p>
+
+    <div class="role-cards">
+      <a class="card" href="/teacher-login.html">
+        <div class="emoji">👩‍🏫</div>
+        <h2>I'm a Teacher</h2>
+        <p class="muted">Create tests, add students, assign & grade.</p>
+        <span class="btn">Teacher login</span>
+      </a>
+      <a class="card" href="/student-login.html">
+        <div class="emoji">🎓</div>
+        <h2>I'm a Student</h2>
+        <p class="muted">Log in and take your assigned tests.</p>
+        <span class="btn secondary">Student login</span>
+      </a>
+    </div>
+  </div>
+
+  <script src="/js/app.js"></script>
+  <script>
+    // If already logged in, jump straight to the dashboard.
+    currentUser().then((u) => {
+      if (u) location.href = u.role === 'teacher' ? '/teacher.html' : '/student.html';
+    });
+  </script>
+</body>
+</html>

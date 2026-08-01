@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Take Test</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <div class="topbar">
+    <a class="brand" href="/student.html">📝 Test<span>Platform</span></a>
+    <div class="row">
+      <span class="user" id="who"></span>
+      <a class="btn ghost small" href="/student.html">Exit</a>
+    </div>
+  </div>
+
+  <div class="container">
+    <div id="msg" class="msg hidden"></div>
+
+    <div id="test-view" class="hidden">
+      <div class="card">
+        <h1 id="test-title"></h1>
+        <p class="muted" id="test-desc"></p>
+      </div>
+      <form id="test-form">
+        <div id="questions"></div>
+        <div class="card">
+          <button class="btn" type="submit">Submit test</button>
+          <span class="muted" style="margin-left:10px">You can only submit once.</span>
+        </div>
+      </form>
+    </div>
+
+    <!-- Result shown after submission -->
+    <div id="result-view" class="hidden">
+      <div class="card center">
+        <h1>✅ Test submitted!</h1>
+        <p id="result-score" style="font-size:22px"></p>
+        <p class="muted" id="result-note"></p>
+        <a class="btn" href="/student.html">Back to my tests</a>
+      </div>
+    </div>
+  </div>
+
+  <script src="/js/app.js"></script>
+  <script>
+    const assignmentId = new URLSearchParams(location.search).get('a');
+    let QUESTIONS = [];
+
+    (async () => {
+      const me = await requireRole('student', '/student-login.html');
+      if (!me) return;
+      document.getElementById('who').textContent = me.name + ' · Student';
+      try {
+        const { test, questions } = await api('/api/take/' + assignmentId);
+        QUESTIONS = questions;
+        document.getElementById('test-title').textContent = test.title;
+        document.getElementById('test-desc').textContent = test.description || '';
+        renderQuestions(questions);
+        document.getElementById('test-view').classList.remove('hidden');
+      } catch (err) {
+        showMsg('msg', err.message);
+      }
+    })();
+
+    function renderQuestions(questions) {
+      const box = document.getElementById('questions');
+      questions.forEach((q, i) => {
+        const card = el(`<div class="q-card">
+          <h3>Q${i + 1}. ${escapeHtml(q.prompt)} <span class="muted">(${q.points} pt)</span></h3>
+        </div>`);
+        if (q.type === 'mcq') {
+          q.options.forEach((opt, idx) => {
+            card.append(el(`<label class="choice">
+              <input type="radio" name="q${q.id}" value="${idx}"> ${escapeHtml(opt)}
+            </label>`));
+          });
+        } else if (q.type === 'truefalse') {
+          ['true', 'false'].forEach((v) => {
+            card.append(el(`<label class="choice">
+              <input type="radio" name="q${q.id}" value="${v}"> ${v === 'true' ? 'True' : 'False'}
+            </label>`));
+          });
+        } else {
+          card.append(el(`<textarea name="q${q.id}" placeholder="Type your answer..."></textarea>`));
+        }
+        box.append(card);
+      });
+    }
+
+    document.getElementById('test-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const answers = {};
+      QUESTIONS.forEach((q) => {
+        const field = document.querySelector(`[name="q${q.id}"]:checked`) || document.querySelector(`textarea[name="q${q.id}"]`);
+        answers[q.id] = field ? field.value : '';
+      });
+      if (!confirm('Submit your test? You cannot change answers after this.')) return;
+      try {
+        const r = await api('/api/submit/' + assignmentId, 'POST', { answers });
+        document.getElementById('test-view').classList.add('hidden');
+        document.getElementById('result-view').classList.remove('hidden');
+        if (r.needsGrading) {
+          document.getElementById('result-score').textContent = `Auto-graded score: ${r.autoScore} / ${r.maxScore}`;
+          document.getElementById('result-note').textContent = 'Some written answers still need to be graded by your teacher.';
+        } else {
+          document.getElementById('result-score').textContent = `Your score: ${r.autoScore} / ${r.maxScore}`;
+        }
+      } catch (err) { showMsg('msg', err.message); }
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Student Dashboard</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <div class="topbar">
+    <a class="brand" href="/student.html">📝 Test<span>Platform</span></a>
+    <div class="row">
+      <span class="user" id="who"></span>
+      <button class="btn ghost small" onclick="logout()">Log out</button>
+    </div>
+  </div>
+
+  <div class="container">
+    <div class="card"><h1>My Tests</h1><p class="muted">Tests your teacher has assigned to you.</p></div>
+    <div id="list"></div>
+  </div>
+
+  <script src="/js/app.js"></script>
+  <script>
+    (async () => {
+      const me = await requireRole('student', '/student-login.html');
+      if (!me) return;
+      document.getElementById('who').textContent = me.name + ' · Student';
+      load();
+    })();
+
+    async function load() {
+      const { assignments } = await api('/api/my-assignments');
+      const box = document.getElementById('list');
+      if (assignments.length === 0) {
+        box.innerHTML = '<div class="card"><p class="muted">No tests assigned yet. Check back later!</p></div>';
+        return;
+      }
+      box.innerHTML = '';
+      assignments.forEach((a) => {
+        const item = el(`<div class="list-item">
+          <div>
+            <h3>${escapeHtml(a.title)}</h3>
+            <div class="muted" style="font-size:13px">${escapeHtml(a.description || '')} ${a.questionCount} question(s)</div>
+          </div>
+          <div class="row"></div>
+        </div>`);
+        const actions = item.querySelector('.row');
+        if (a.submitted) {
+          if (a.needsGrading) {
+            actions.append(el('<span class="pill amber">submitted · awaiting grade</span>'));
+          } else {
+            actions.append(el(`<span class="pill green">Score: ${a.score} / ${a.maxScore}</span>`));
+          }
+        } else {
+          const btn = el('<button class="btn small">Start test</button>');
+          btn.onclick = () => location.href = '/take-test.html?a=' + a.assignmentId;
+          actions.append(btn);
+        }
+        box.append(item);
+      });
+    }
+  </script>
+</body>
+</html>
