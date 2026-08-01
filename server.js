@@ -62,7 +62,7 @@ app.use((req, res, next) => {
   req.user = null;
   if (sid) {
     const row = db.prepare(
-      `SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?`
+      `SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ? AND u.disabled = 0`
     ).get(sid);
     if (row) req.user = row;
   }
@@ -113,6 +113,8 @@ app.post('/api/login', (req, res) => {
   const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
   if (!user || !verifyPassword(password, user.password_hash))
     return res.status(401).json({ error: 'Incorrect email or password.' });
+  if (user.disabled)
+    return res.status(403).json({ error: 'Your account has been disabled. Please contact your teacher.' });
   startSession(res, user.id);
   res.json({ user: publicUser(user) });
 });
@@ -153,19 +155,47 @@ app.post('/api/students', requireAuth('teacher'), (req, res) => {
 
 // List this teacher's students + pending invites.
 app.get('/api/students', requireAuth('teacher'), (req, res) => {
-  const invites = db.prepare(
-    `SELECT t.name, t.email, t.phone, t.token, t.used, t.student_id
-       FROM signup_tokens t WHERE t.teacher_id = ? ORDER BY t.created_at DESC`
-  ).all(req.user.id);
+  const q = (req.query.q || '').trim();
+  const base =
+    `SELECT t.name, t.email, t.phone, t.token, t.used, t.student_id, u.disabled
+       FROM signup_tokens t
+       LEFT JOIN users u ON u.id = t.student_id
+      WHERE t.teacher_id = ?`;
+  let invites;
+  if (q) {
+    // Escape LIKE wildcards so the user's text is matched literally.
+    const like = '%' + q.replace(/[\\%_]/g, '\\$&') + '%';
+    invites = db.prepare(
+      `${base} AND (t.name LIKE ? ESCAPE '\\' OR t.email LIKE ? ESCAPE '\\') ORDER BY t.created_at DESC`
+    ).all(req.user.id, like, like);
+  } else {
+    invites = db.prepare(`${base} ORDER BY t.created_at DESC`).all(req.user.id);
+  }
   const students = invites.map((i) => ({
     name: i.name,
     email: i.email,
     phone: i.phone,
     signedUp: !!i.used,
     studentId: i.student_id,
+    disabled: !!i.disabled,
     signupPath: i.used ? null : `/signup.html?token=${i.token}`,
   }));
   res.json({ students });
+});
+
+// Enable/disable a student. A disabled student cannot log in, and any active
+// session is revoked immediately.
+app.patch('/api/students/:id', requireAuth('teacher'), (req, res) => {
+  const studentId = Number(req.params.id);
+  // Only allow toggling students this teacher created.
+  const owned = db.prepare(
+    'SELECT 1 FROM signup_tokens WHERE teacher_id = ? AND student_id = ?'
+  ).get(req.user.id, studentId);
+  if (!owned) return res.status(404).json({ error: 'Student not found.' });
+  const disabled = req.body.disabled ? 1 : 0;
+  db.prepare("UPDATE users SET disabled = ? WHERE id = ? AND role = 'student'").run(disabled, studentId);
+  if (disabled) db.prepare('DELETE FROM sessions WHERE user_id = ?').run(studentId); // log them out now
+  res.json({ ok: true, disabled: !!disabled });
 });
 
 // Validate a signup token (used by the signup page to pre-fill name/email).

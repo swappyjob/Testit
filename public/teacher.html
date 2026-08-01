@@ -85,6 +85,7 @@
       </div>
       <div class="card">
         <h2>Your students</h2>
+        <input type="text" id="s-search" placeholder="🔍 Search by name or email..." style="margin-bottom:14px" oninput="onStudentSearch()">
         <div id="students-list"></div>
       </div>
     </section>
@@ -486,37 +487,73 @@
         document.getElementById('s-name').value = '';
         document.getElementById('s-email').value = '';
         document.getElementById('s-phone').value = '';
-        showMsg('student-msg', 'Student created! Copy their signup link below and send it to them.', 'ok');
+        document.getElementById('s-search').value = '';
+        showMsg('student-msg', 'Student created! Use the "Copy link" button in the table to share their signup link.', 'ok');
         loadStudents();
       } catch (err) { showMsg('student-msg', err.message); }
     }
 
-    async function loadStudents() {
-      const { students } = await api('/api/students');
+    let searchTimer = null;
+    function onStudentSearch() {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(() => loadStudents(document.getElementById('s-search').value.trim()), 250);
+    }
+
+    async function loadStudents(query = '') {
+      const { students } = await api('/api/students' + (query ? '?q=' + encodeURIComponent(query) : ''));
       const box = document.getElementById('students-list');
-      if (students.length === 0) { box.innerHTML = '<p class="muted">No students yet.</p>'; return; }
+      if (students.length === 0) {
+        box.innerHTML = query
+          ? `<p class="muted">No students match “${escapeHtml(query)}”.</p>`
+          : '<p class="muted">No students yet.</p>';
+        return;
+      }
       box.innerHTML = '';
+      const table = el(`<table>
+        <thead><tr><th>Name</th><th>Email</th><th>Mobile number</th><th>Signup link</th><th>Status</th></tr></thead>
+        <tbody></tbody>
+      </table>`);
+      const tb = table.querySelector('tbody');
       students.forEach((s) => {
-        const item = el(`<div class="list-item" style="display:block">
-          <div class="row" style="justify-content:space-between">
-            <div><h3>${escapeHtml(s.name)}</h3><div class="muted" style="font-size:13px">${escapeHtml(s.email)}${s.phone ? ' · ' + escapeHtml(s.phone) : ''}</div></div>
-            ${s.signedUp ? '<span class="pill green">signed up</span>' : '<span class="pill amber">invite pending</span>'}
-          </div>
-        </div>`);
+        const tr = el(`<tr>
+          <td>${escapeHtml(s.name)}</td>
+          <td>${escapeHtml(s.email)}</td>
+          <td>${s.phone ? escapeHtml(s.phone) : '<span class="muted">—</span>'}</td>
+          <td class="link-cell"></td>
+          <td class="status-cell"></td>
+        </tr>`);
+        const linkCell = tr.querySelector('.link-cell');
+        const statusCell = tr.querySelector('.status-cell');
         if (!s.signedUp) {
           const link = location.origin + s.signupPath;
-          const cb = el(`<div class="copybox">
-            <input type="text" readonly value="${link}">
-            <button class="btn secondary small">Copy link</button>
-          </div>`);
-          cb.querySelector('button').onclick = () => {
+          const btn = el('<button class="btn secondary small">Copy link</button>');
+          btn.onclick = () => {
             navigator.clipboard.writeText(link);
-            cb.querySelector('button').textContent = 'Copied!';
+            btn.textContent = 'Copied!';
+            setTimeout(() => { btn.textContent = 'Copy link'; }, 1500);
           };
-          item.append(cb);
+          linkCell.append(btn);
+          statusCell.innerHTML = '<span class="pill amber">invite pending</span>';
+        } else {
+          linkCell.innerHTML = '<span class="muted">—</span>';
+          statusCell.innerHTML = s.disabled
+            ? '<span class="pill gray">disabled</span>'
+            : '<span class="pill green">active</span>';
+          const toggle = el(`<button class="btn ${s.disabled ? 'secondary' : 'danger'} small" style="margin-left:8px">${s.disabled ? 'Enable' : 'Disable'}</button>`);
+          toggle.onclick = () => toggleStudent(s.studentId, !s.disabled);
+          statusCell.append(toggle);
         }
-        box.append(item);
+        tb.append(tr);
       });
+      box.append(table);
+    }
+
+    async function toggleStudent(studentId, disable) {
+      if (disable && !confirm('Disable this student? They will be logged out immediately and cannot log in until you re-enable them.')) return;
+      try {
+        await api('/api/students/' + studentId, 'PATCH', { disabled: disable });
+        loadStudents(document.getElementById('s-search').value.trim());
+      } catch (err) { showMsg('student-msg', err.message); }
     }
   </script>
 </body>

@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS users (
   email         TEXT NOT NULL UNIQUE,
   phone         TEXT NOT NULL DEFAULT '',
   password_hash TEXT NOT NULL,
+  disabled      INTEGER NOT NULL DEFAULT 0,
   created_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -108,6 +109,7 @@ ensureColumn('tests', 'negative_marking', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('tests', 'penalty', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('questions', 'image_url', "TEXT NOT NULL DEFAULT ''");
 ensureColumn('users', 'phone', "TEXT NOT NULL DEFAULT ''");
+ensureColumn('users', 'disabled', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('signup_tokens', 'phone', "TEXT NOT NULL DEFAULT ''");
 
 export default db;
