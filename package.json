@@ -9,7 +9,9 @@
     "test": "node run-tests.mjs"
   },
   "dependencies": {
+    "dotenv": "^17.4.2",
     "express": "^4.21.2",
+    "nodemailer": "^9.0.3",
     "pg": "^8.22.0"
   }
 }

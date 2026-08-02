@@ -1,8 +1,10 @@
+import 'dotenv/config';
 import express from 'express';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import nodemailer from 'nodemailer';
 import { get, all, run, tx, init } from './db.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -33,6 +35,47 @@ function verifyPassword(password, stored) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 const randomToken = () => crypto.randomBytes(24).toString('hex');
+
+// --- Password-reset helpers --------------------------------------------------
+// Email is optional: if SMTP isn't configured, we log the link to the console
+// so resets still work in local/dev setups (and admin-generated links always work).
+const mailer = (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS)
+  ? nodemailer.createTransport({
+      host: process.env.SMTP_HOST,
+      port: Number(process.env.SMTP_PORT || 587),
+      secure: String(process.env.SMTP_SECURE) === 'true',
+      auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+    })
+  : null;
+
+async function createResetToken(userId) {
+  const token = randomToken();
+  await run(
+    "INSERT INTO password_resets (token, user_id, expires_at) VALUES (?, ?, NOW() + INTERVAL '1 hour')",
+    [token, userId]
+  );
+  return token;
+}
+
+function resetLink(req, token) {
+  return `${req.protocol}://${req.get('host')}/reset.html?token=${token}`;
+}
+
+async function sendResetEmail(to, link) {
+  if (!mailer) {
+    console.log(`\n[password reset] SMTP not configured. Reset link for ${to}:\n  ${link}\n`);
+    return;
+  }
+  await mailer.sendMail({
+    from: process.env.SMTP_FROM || process.env.SMTP_USER,
+    to,
+    subject: 'Reset your Online Test Platform password',
+    text: `We received a request to reset your password.\n\nOpen this link to choose a new password (valid for 1 hour):\n${link}\n\nIf you didn't request this, you can ignore this email.`,
+    html: `<p>We received a request to reset your password.</p>
+           <p><a href="${link}">Click here to choose a new password</a> (valid for 1 hour).</p>
+           <p>If you didn't request this, you can ignore this email.</p>`,
+  });
+}
 
 // --- Cookie / session helpers ------------------------------------------------
 function parseCookies(req) {
@@ -149,6 +192,52 @@ app.post('/api/change-password', requireAuth(), h(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// Self-service: request a password reset link by email.
+app.post('/api/forgot-password', h(async (req, res) => {
+  const email = (req.body.email || '').trim().toLowerCase();
+  const user = email ? await get('SELECT id, disabled FROM users WHERE email = ?', [email]) : null;
+  if (user && !user.disabled) {
+    const token = await createResetToken(user.id);
+    await sendResetEmail(email, resetLink(req, token));
+  }
+  // Always generic, so we don't reveal which emails exist.
+  res.json({ ok: true });
+}));
+
+// Validate a reset token (used by the reset page).
+app.get('/api/reset/:token', h(async (req, res) => {
+  const r = await get(
+    `SELECT pr.used, pr.expires_at, u.email, u.role
+       FROM password_resets pr JOIN users u ON u.id = pr.user_id
+      WHERE pr.token = ?`,
+    [req.params.token]
+  );
+  if (!r) return res.status(404).json({ error: 'This reset link is invalid.' });
+  if (r.used) return res.status(410).json({ error: 'This reset link has already been used.' });
+  if (new Date(r.expires_at) < new Date()) return res.status(410).json({ error: 'This reset link has expired.' });
+  res.json({ email: r.email, role: r.role });
+}));
+
+// Complete a reset: set a new password.
+app.post('/api/reset/:token', h(async (req, res) => {
+  const password = req.body.password || '';
+  if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters.' });
+  const r = await get('SELECT * FROM password_resets WHERE token = ?', [req.params.token]);
+  if (!r) return res.status(404).json({ error: 'This reset link is invalid.' });
+  if (r.used) return res.status(410).json({ error: 'This reset link has already been used.' });
+  if (new Date(r.expires_at) < new Date()) return res.status(410).json({ error: 'This reset link has expired.' });
+  const user = await get('SELECT role FROM users WHERE id = ?', [r.user_id]);
+
+  await tx(async (t) => {
+    await t.run('UPDATE users SET password_hash = ? WHERE id = ?', [hashPassword(password), r.user_id]);
+    await t.run('UPDATE password_resets SET used = 1 WHERE token = ?', [req.params.token]);
+    // Invalidate any other outstanding reset links and log the user out everywhere.
+    await t.run('UPDATE password_resets SET used = 1 WHERE user_id = ? AND used = 0', [r.user_id]);
+    await t.run('DELETE FROM sessions WHERE user_id = ?', [r.user_id]);
+  });
+  res.json({ ok: true, role: user.role });
+}));
+
 // ============================================================================
 // STUDENTS + SIGNUP LINKS  (teacher creates students)
 // ============================================================================
@@ -247,6 +336,15 @@ app.patch('/api/students/:id', requireAuth('teacher'), h(async (req, res) => {
   res.json({ ok: true, disabled: !!disabled });
 }));
 
+// Teacher generates a password-reset link for one of their students.
+app.post('/api/students/:id/reset-link', requireAuth('teacher'), h(async (req, res) => {
+  const studentId = Number(req.params.id);
+  const owned = await get('SELECT 1 FROM signup_tokens WHERE teacher_id = ? AND student_id = ?', [req.user.id, studentId]);
+  if (!owned) return res.status(404).json({ error: 'Student not found.' });
+  const token = await createResetToken(studentId);
+  res.json({ resetPath: `/reset.html?token=${token}` });
+}));
+
 // ============================================================================
 // TEACHERS  (root teachers can invite other teachers)
 // ============================================================================
@@ -282,15 +380,24 @@ app.get('/api/teachers', requireRoot, h(async (req, res) => {
   );
   const teachers = [
     ...signedUp.map((u) => ({
-      name: u.name, email: u.email, phone: u.phone, isRoot: !!u.is_root, disabled: !!u.disabled,
+      id: u.id, name: u.name, email: u.email, phone: u.phone, isRoot: !!u.is_root, disabled: !!u.disabled,
       signedUp: true, isSelf: u.id === req.user.id, signupPath: null,
     })),
     ...pending.map((p) => ({
-      name: p.name, email: p.email, phone: p.phone, isRoot: !!p.is_root, disabled: false,
+      id: null, name: p.name, email: p.email, phone: p.phone, isRoot: !!p.is_root, disabled: false,
       signedUp: false, isSelf: false, signupPath: `/signup.html?token=${p.token}`,
     })),
   ];
   res.json({ teachers });
+}));
+
+// Root generates a password-reset link for any teacher.
+app.post('/api/teachers/:id/reset-link', requireRoot, h(async (req, res) => {
+  const teacherId = Number(req.params.id);
+  const t = await get("SELECT id FROM users WHERE id = ? AND role = 'teacher'", [teacherId]);
+  if (!t) return res.status(404).json({ error: 'Teacher not found.' });
+  const token = await createResetToken(teacherId);
+  res.json({ resetPath: `/reset.html?token=${token}` });
 }));
 
 // Validate a signup token (used by the signup page to pre-fill name/email).

@@ -642,6 +642,9 @@
           const toggle = el(`<button class="btn ${s.disabled ? 'secondary' : 'danger'} small" style="margin-left:8px">${s.disabled ? 'Enable' : 'Disable'}</button>`);
           toggle.onclick = () => toggleStudent(s.studentId, !s.disabled);
           statusCell.append(toggle);
+          const resetBtn = el('<button class="btn secondary small" style="margin-left:8px">Reset link</button>');
+          resetBtn.onclick = () => copyResetLink('/api/students/' + s.studentId + '/reset-link', resetBtn);
+          statusCell.append(resetBtn);
         }
         tb.append(tr);
       });
@@ -685,7 +688,12 @@
         </tr>`);
         const linkCell = tr.querySelector('.link-cell');
         if (t.signedUp) {
-          linkCell.innerHTML = '<span class="pill green">signed up</span>';
+          linkCell.innerHTML = '<span class="pill green">signed up</span> ';
+          if (t.id && !t.isSelf) {
+            const rb = el('<button class="btn secondary small" style="margin-left:6px">Reset link</button>');
+            rb.onclick = () => copyResetLink('/api/teachers/' + t.id + '/reset-link', rb);
+            linkCell.append(rb);
+          }
         } else {
           const link = location.origin + t.signupPath;
           const btn = el('<button class="btn secondary small">Copy link</button>');
@@ -699,6 +707,18 @@
         tb.append(tr);
       });
       box.append(table);
+    }
+
+    // Generate a password-reset link for a user and copy it to the clipboard.
+    async function copyResetLink(endpoint, btn) {
+      try {
+        const { resetPath } = await api(endpoint, 'POST');
+        const link = location.origin + resetPath;
+        await navigator.clipboard.writeText(link);
+        const prev = btn.textContent;
+        btn.textContent = 'Link copied!';
+        setTimeout(() => { btn.textContent = prev; }, 1600);
+      } catch (err) { alert(err.message); }
     }
 
     async function toggleStudent(studentId, disable) {
