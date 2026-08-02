@@ -183,6 +183,33 @@ app.get('/api/students', requireAuth('teacher'), (req, res) => {
   res.json({ students });
 });
 
+// Download all of this teacher's students as a CSV file.
+app.get('/api/students/export.csv', requireAuth('teacher'), (req, res) => {
+  const rows = db.prepare(
+    `SELECT t.name, t.email, t.phone, t.used, u.disabled, t.created_at
+       FROM signup_tokens t
+       LEFT JOIN users u ON u.id = t.student_id
+      WHERE t.teacher_id = ? ORDER BY t.created_at DESC`
+  ).all(req.user.id);
+
+  const esc = (v) => {
+    const s = v == null ? '' : String(v);
+    return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  const header = ['Name', 'Email', 'Mobile Number', 'Signup Status', 'Account Status', 'Added On'];
+  const lines = [header.join(',')];
+  for (const r of rows) {
+    const signup = r.used ? 'Signed up' : 'Invite pending';
+    const account = !r.used ? '' : (r.disabled ? 'Disabled' : 'Active');
+    lines.push([r.name, r.email, r.phone, signup, account, r.created_at].map(esc).join(','));
+  }
+  // Leading BOM so Excel opens UTF-8 (e.g. "+91…" / names) correctly.
+  const csv = '﻿' + lines.join('\r\n');
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="students.csv"');
+  res.send(csv);
+});
+
 // Enable/disable a student. A disabled student cannot log in, and any active
 // session is revoked immediately.
 app.patch('/api/students/:id', requireAuth('teacher'), (req, res) => {

@@ -84,8 +84,11 @@
         <div style="margin-top:16px"><button class="btn" onclick="addStudent()">Create student & get link</button></div>
       </div>
       <div class="card">
-        <h2>Your students</h2>
-        <input type="text" id="s-search" placeholder="🔍 Search by name or email..." style="margin-bottom:14px" oninput="onStudentSearch()">
+        <div class="row" style="justify-content:space-between; align-items:center">
+          <h2 style="margin:0">Your students</h2>
+          <a class="btn secondary small" href="/api/students/export.csv" download>⬇ Download CSV</a>
+        </div>
+        <input type="text" id="s-search" placeholder="🔍 Search by name or email..." style="margin:14px 0" oninput="onStudentSearch()">
         <div id="students-list"></div>
       </div>
     </section>
