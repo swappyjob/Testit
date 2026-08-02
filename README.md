@@ -2,8 +2,8 @@
 
 A simple website where **teachers create tests** and **students take them online**.
 
-Built with Node.js + Express and SQLite (using Node's built-in `node:sqlite` — no
-database server or C++ compiler required). Passwords are hashed with scrypt.
+Built with Node.js + Express and **PostgreSQL** (via the `pg` driver). Passwords
+are hashed with scrypt.
 
 ## Features
 
@@ -16,12 +16,32 @@ database server or C++ compiler required). Passwords are hashed with scrypt.
 
 ## Run it locally
 
+Requires a running **PostgreSQL** server and a database named `testit`:
+
 ```bash
+createdb testit          # once
 npm install
 npm start
 ```
 
 Then open **http://localhost:3000** in your browser.
+
+### Database connection
+
+The app reads standard Postgres environment variables, with local defaults:
+
+| Variable | Default |
+|----------|---------|
+| `PGHOST` | `localhost` |
+| `PGPORT` | `5432` |
+| `PGUSER` | `postgres` |
+| `PGPASSWORD` | `postgres` |
+| `PGDATABASE` | `testit` |
+
+### Tests
+
+`npm test` runs the full suite against a separate `testit_test` database (create it
+once with `createdb testit_test`), so your real data is never touched.
 
 ## How to use
 
@@ -38,8 +58,8 @@ Then open **http://localhost:3000** in your browser.
 ## Project structure
 
 ```
-server.js      Express server + all API routes
-db.js          SQLite schema and connection
+server.js      Express server + all API routes (async)
+db.js          Postgres connection pool, schema, and query helpers
 public/        Frontend (HTML/CSS/JS, no build step)
-data.db        The database file (created automatically, git-ignored)
+run-tests.mjs  Test runner (spins up an isolated testit_test database)
 ```
