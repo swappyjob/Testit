@@ -1,5 +1,5 @@
 // Tests that a student's phone number is required, stored, and carried to signup.
-const BASE = 'http://localhost:3000';
+const BASE = process.env.TEST_BASE || 'http://localhost:3000';
 function makeJar() {
   const jar = {};
   return {

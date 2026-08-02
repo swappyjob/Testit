@@ -1,5 +1,5 @@
 // Tests disabling/enabling a student and its effect on login + sessions.
-const BASE = 'http://localhost:3000';
+const BASE = process.env.TEST_BASE || 'http://localhost:3000';
 function makeJar() {
   const jar = {};
   return {

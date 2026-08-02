@@ -29,6 +29,11 @@
       load();
     })();
 
+    function fmtDue(s) {
+      const d = new Date(s);
+      return isNaN(d) ? s : d.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+    }
+
     async function load() {
       const { assignments } = await api('/api/my-assignments');
       const box = document.getElementById('list');
@@ -38,10 +43,11 @@
       }
       box.innerHTML = '';
       assignments.forEach((a) => {
+        const due = a.dueDate ? ' · Due ' + fmtDue(a.dueDate) : '';
         const item = el(`<div class="list-item">
           <div>
             <h3>${escapeHtml(a.title)}</h3>
-            <div class="muted" style="font-size:13px">${escapeHtml(a.description || '')} ${a.questionCount} question(s)</div>
+            <div class="muted" style="font-size:13px">${escapeHtml(a.description || '')} ${a.questionCount} question(s)${escapeHtml(due)}</div>
           </div>
           <div class="row"></div>
         </div>`);
@@ -52,6 +58,8 @@
           } else {
             actions.append(el(`<span class="pill green">Score: ${a.score} / ${a.maxScore}</span>`));
           }
+        } else if (a.closed) {
+          actions.append(el('<span class="pill gray">closed · deadline passed</span>'));
         } else {
           const btn = el('<button class="btn small">Start test</button>');
           btn.onclick = () => location.href = '/take-test.html?a=' + a.assignmentId;

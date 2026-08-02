@@ -57,7 +57,13 @@
         const { test, questions } = await api('/api/take/' + assignmentId);
         QUESTIONS = questions;
         document.getElementById('test-title').textContent = test.title;
-        document.getElementById('test-desc').textContent = test.description || '';
+        const desc = document.getElementById('test-desc');
+        desc.textContent = test.description || '';
+        if (test.due_date) {
+          const d = new Date(test.due_date);
+          const when = isNaN(d) ? test.due_date : d.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+          desc.textContent += (test.description ? '  ·  ' : '') + '⏰ Due: ' + when;
+        }
         if (test.negative_marking) {
           const w = document.getElementById('negmark-warn');
           w.textContent = `⚠️ Negative marking is ON: ${test.penalty} mark(s) will be deducted for each wrong multiple-choice / true-false answer. Leaving a question blank costs nothing.`;

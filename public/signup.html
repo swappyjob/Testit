@@ -13,11 +13,11 @@
 
   <div class="container narrow">
     <div class="card">
-      <h1>Welcome! 🎓</h1>
+      <h1 id="signup-heading">Welcome! 🎓</h1>
       <div id="msg" class="msg hidden"></div>
 
       <div id="form-wrap" class="hidden">
-        <p class="muted">Your teacher invited you. Set a password to finish creating your account.</p>
+        <p class="muted" id="signup-sub">Your teacher invited you. Set a password to finish creating your account.</p>
         <label>Name</label>
         <input type="text" id="name" disabled>
         <label>Email</label>
@@ -41,6 +41,12 @@
         const info = await api('/api/signup/' + encodeURIComponent(token));
         document.getElementById('name').value = info.name;
         document.getElementById('email').value = info.email;
+        if (info.role === 'teacher') {
+          const roleName = info.isRoot ? 'root teacher' : 'teacher';
+          document.getElementById('signup-heading').textContent = 'Welcome! 👩‍🏫';
+          document.getElementById('signup-sub').textContent =
+            `You've been invited as a ${roleName}. Set a password to finish creating your account.`;
+        }
         document.getElementById('form-wrap').classList.remove('hidden');
       } catch (err) {
         showMsg('msg', err.message);
@@ -50,10 +56,10 @@
     document.getElementById('signup-form').addEventListener('submit', async (e) => {
       e.preventDefault();
       try {
-        await api('/api/signup/' + encodeURIComponent(token), 'POST', {
+        const { user } = await api('/api/signup/' + encodeURIComponent(token), 'POST', {
           password: document.getElementById('password').value,
         });
-        location.href = '/student.html';
+        location.href = user.role === 'teacher' ? '/teacher.html' : '/student.html';
       } catch (err) { showMsg('msg', err.message); }
     });
   </script>

@@ -53,3 +53,35 @@ async function logout() {
   await api('/api/logout', 'POST');
   location.href = '/';
 }
+
+// Add a show/hide "eye" toggle to every password field on the page.
+function enablePasswordToggles(root = document) {
+  root.querySelectorAll('input[type="password"]').forEach((input) => {
+    if (input.dataset.pwToggle) return; // already wrapped
+    input.dataset.pwToggle = '1';
+    const wrap = document.createElement('span');
+    wrap.className = 'pw-wrap';
+    input.parentNode.insertBefore(wrap, input);
+    wrap.appendChild(input);
+
+    const btn = document.createElement('button');
+    btn.type = 'button'; // don't submit the form
+    btn.className = 'pw-toggle';
+    btn.textContent = '👁';
+    btn.setAttribute('aria-label', 'Show password');
+    btn.addEventListener('click', () => {
+      const show = input.type === 'password';
+      input.type = show ? 'text' : 'password';
+      btn.textContent = show ? '🙈' : '👁';
+      btn.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+      input.focus();
+    });
+    wrap.appendChild(btn);
+  });
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => enablePasswordToggles());
+} else {
+  enablePasswordToggles();
+}

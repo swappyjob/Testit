@@ -1,5 +1,5 @@
 // Tests the new "edit a test" feature end-to-end.
-const BASE = 'http://localhost:3000';
+const BASE = process.env.TEST_BASE || 'http://localhost:3000';
 function makeJar() {
   const jar = {};
   return {
@@ -51,6 +51,9 @@ let list = (await call(teacher, '/api/tests')).tests.find((t) => t.id === testId
 if (list.submitted_count !== 1) throw new Error('expected submitted_count 1, got ' + list.submitted_count);
 ok('submitted_count reflects 1 submission');
 
+// Capture the student's attempt before editing, to prove it survives.
+const attemptId = (await call(teacher, '/api/tests/' + testId + '/results')).results[0].attemptId;
+
 // EDIT: change title, change mcq choices/correct, add a true/false, drop short
 const upd = await call(teacher, '/api/tests/' + testId, 'PUT', {
   title: 'Edited Title',
@@ -60,24 +63,43 @@ const upd = await call(teacher, '/api/tests/' + testId, 'PUT', {
     { type: 'truefalse', prompt: 'Water is wet.', correct: 'true', points: 1 },
   ],
 });
-if (upd.clearedAttempts !== 1) throw new Error('expected clearedAttempts 1, got ' + upd.clearedAttempts);
-ok('edited test; 1 old submission cleared');
+if (upd.keptAttempts !== 1) throw new Error('expected keptAttempts 1, got ' + upd.keptAttempts);
+ok('edited test; existing submission preserved (not cleared)');
 
-// Verify new content
+// The student's past submission is still there
+list = (await call(teacher, '/api/tests')).tests.find((t) => t.id === testId);
+if (list.submitted_count !== 1) throw new Error('expected submitted_count still 1, got ' + list.submitted_count);
+ok('submitted_count still 1 after edit');
+
+// The preserved attempt still shows the ORIGINAL questions the student saw
+const { items } = await call(teacher, '/api/attempts/' + attemptId);
+if (!items.some((it) => it.prompt === '2+2?')) throw new Error('original question lost from past attempt');
+ok('past attempt still shows the original questions & score');
+
+// The active (current) version has the new questions
 const detail = await call(teacher, '/api/tests/' + testId);
 if (detail.test.title !== 'Edited Title') throw new Error('title not updated');
-if (detail.questions.length !== 2) throw new Error('expected 2 questions');
+if (detail.questions.length !== 2) throw new Error('expected 2 active questions, got ' + detail.questions.length);
 if (detail.questions[0].prompt !== 'Capital of Japan?') throw new Error('q1 not updated');
 if (detail.questions[0].correct_answer !== '0') throw new Error('mcq correct not updated');
-if (detail.questions[1].type !== 'truefalse') throw new Error('q2 type wrong');
-ok('updated questions & answers persisted correctly');
+ok('current version has the new questions & answers');
 
-// submitted_count back to 0, and student can take it again
-list = (await call(teacher, '/api/tests')).tests.find((t) => t.id === testId);
-if (list.submitted_count !== 0) throw new Error('expected submitted_count 0 after edit');
-const retake = await call(student, '/api/take/' + aid);
-if (retake.test.title !== 'Edited Title') throw new Error('student sees old title');
-ok('student can retake the edited test');
+// The student who already submitted cannot retake (their result stays)
+let retakeBlocked = false;
+try { await call(student, '/api/take/' + aid); } catch { retakeBlocked = true; }
+if (!retakeBlocked) throw new Error('already-submitted student should not be able to retake');
+ok('already-submitted student cannot retake');
+
+// A fresh student assigned now gets the NEW version
+const student2 = makeJar();
+const { token: token2 } = await call(teacher, '/api/students', 'POST', { name: 'S2', email: `s2_${rand}@x.com`, phone: '9000000001' });
+const { user: su2 } = await call(student2, '/api/signup/' + token2, 'POST', { password: 'pass123' });
+await call(teacher, '/api/assignments', 'POST', { test_id: testId, student_ids: [su2.id] });
+const mine2 = await call(student2, '/api/my-assignments');
+const take2 = await call(student2, '/api/take/' + mine2.assignments[0].assignmentId);
+if (take2.questions.length !== 2 || take2.questions[0].prompt !== 'Capital of Japan?')
+  throw new Error('new student did not get the edited version');
+ok('a new student gets the edited version');
 
 // Non-owner cannot edit
 const other = makeJar();

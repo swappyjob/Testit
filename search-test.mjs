@@ -1,5 +1,5 @@
 // Tests server-side search of students by name and email.
-const BASE = 'http://localhost:3000';
+const BASE = process.env.TEST_BASE || 'http://localhost:3000';
 function makeJar() {
   const jar = {};
   return {

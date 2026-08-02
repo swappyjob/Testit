@@ -1,5 +1,5 @@
 // Tests the negative-marking feature end-to-end.
-const BASE = 'http://localhost:3000';
+const BASE = process.env.TEST_BASE || 'http://localhost:3000';
 function makeJar() {
   const jar = {};
   return {

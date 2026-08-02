@@ -11,7 +11,33 @@
     <a class="brand" href="/teacher.html">📝 Test<span>Platform</span></a>
     <div class="row">
       <span class="user" id="who"></span>
+      <button class="btn ghost small" onclick="openProfile()">⚙ Profile</button>
       <button class="btn ghost small" onclick="logout()">Log out</button>
+    </div>
+  </div>
+
+  <!-- Profile / change-password modal -->
+  <div id="profile-modal" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="row" style="justify-content:space-between; align-items:center">
+        <h2 style="margin:0">Profile</h2>
+        <button class="btn ghost small" onclick="closeProfile()">✕</button>
+      </div>
+      <p class="muted" id="profile-info" style="margin-top:6px"></p>
+      <div id="profile-msg" class="msg hidden"></div>
+      <h3 style="margin-top:16px">Change password</h3>
+      <form id="password-form">
+        <label>Current password</label>
+        <input type="password" id="cur-pass" required autocomplete="current-password">
+        <label>New password (min 6 characters)</label>
+        <input type="password" id="new-pass" required autocomplete="new-password">
+        <label>Confirm new password</label>
+        <input type="password" id="confirm-pass" required autocomplete="new-password">
+        <div class="row" style="margin-top:18px">
+          <button class="btn" type="submit">Update password</button>
+          <button class="btn ghost" type="button" onclick="closeProfile()">Cancel</button>
+        </div>
+      </form>
     </div>
   </div>
 
@@ -20,6 +46,7 @@
       <button class="tab active" data-tab="tests" onclick="showTab('tests')">My Tests</button>
       <button class="tab" data-tab="create" onclick="newTest()">Create Test</button>
       <button class="tab" data-tab="students" onclick="showTab('students')">Students</button>
+      <button class="tab hidden" data-tab="teachers" id="teachers-tab-btn" onclick="showTab('teachers')">Teachers</button>
     </div>
 
     <!-- ======================= MY TESTS ======================= -->
@@ -40,6 +67,10 @@
         <input type="text" id="t-title" placeholder="e.g. Chapter 1 Quiz">
         <label>Description (optional)</label>
         <textarea id="t-desc" placeholder="Instructions for students..."></textarea>
+
+        <label>End date &amp; time (optional deadline)</label>
+        <input type="datetime-local" id="t-due" style="width:auto">
+        <p class="muted" style="font-size:13px;margin:6px 0 0">After this moment, students can no longer open or submit the test. Leave blank for no deadline.</p>
 
         <div class="q-card" style="margin-top:16px">
           <label class="choice" style="font-weight:600">
@@ -92,6 +123,32 @@
         <div id="students-list"></div>
       </div>
     </section>
+
+    <!-- ======================= TEACHERS (root only) ======================= -->
+    <section id="tab-teachers" class="hidden">
+      <div class="card">
+        <h1>Add a teacher</h1>
+        <p class="muted">Invite another teacher and choose their role. Root teachers can add more teachers; normal teachers cannot.</p>
+        <div id="teacher-msg" class="msg hidden"></div>
+        <div class="grid two">
+          <div><label>Teacher name</label><input type="text" id="teach-name"></div>
+          <div><label>Teacher email</label><input type="email" id="teach-email"></div>
+          <div><label>Phone number</label><input type="tel" id="teach-phone" placeholder="e.g. +91 98765 43210"></div>
+          <div>
+            <label>Role</label>
+            <select id="teach-role">
+              <option value="teacher">Teacher (create/assign/edit tests)</option>
+              <option value="root">Root teacher (also manages teachers)</option>
+            </select>
+          </div>
+        </div>
+        <div style="margin-top:16px"><button class="btn" onclick="addTeacher()">Create teacher & get link</button></div>
+      </div>
+      <div class="card">
+        <h2>All teachers</h2>
+        <div id="teachers-list"></div>
+      </div>
+    </section>
   </div>
 
   <script src="/js/app.js"></script>
@@ -100,18 +157,55 @@
     (async () => {
       ME = await requireRole('teacher', '/teacher-login.html');
       if (!ME) return;
-      document.getElementById('who').textContent = ME.name + ' · Teacher';
+      document.getElementById('who').textContent = ME.name + ' · ' + (ME.isRoot ? 'Root teacher' : 'Teacher');
+      if (ME.isRoot) {
+        document.getElementById('teachers-tab-btn').classList.remove('hidden');
+        loadTeachers();
+      }
       loadTests();
       loadStudents();
       addQuestion('mcq');
     })();
 
     function showTab(name) {
-      for (const s of ['tests', 'create', 'students'])
+      for (const s of ['tests', 'create', 'students', 'teachers'])
         document.getElementById('tab-' + s).classList.toggle('hidden', s !== name);
       document.querySelectorAll('.tab').forEach((t) =>
         t.classList.toggle('active', t.dataset.tab === name));
       document.getElementById('detail').innerHTML = '';
+    }
+
+    // ---------------- PROFILE / CHANGE PASSWORD ----------------
+    function openProfile() {
+      document.getElementById('profile-info').textContent = ME ? `${ME.name} · ${ME.email}` : '';
+      document.getElementById('profile-msg').classList.add('hidden');
+      document.getElementById('password-form').reset();
+      document.getElementById('profile-modal').classList.remove('hidden');
+    }
+    function closeProfile() {
+      document.getElementById('profile-modal').classList.add('hidden');
+    }
+    document.getElementById('password-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const currentPassword = document.getElementById('cur-pass').value;
+      const newPassword = document.getElementById('new-pass').value;
+      const confirm = document.getElementById('confirm-pass').value;
+      if (newPassword !== confirm) { showMsg('profile-msg', 'The new passwords do not match.'); return; }
+      try {
+        await api('/api/change-password', 'POST', { currentPassword, newPassword });
+        showMsg('profile-msg', 'Password updated successfully! Other devices have been logged out.', 'ok');
+        document.getElementById('password-form').reset();
+      } catch (err) { showMsg('profile-msg', err.message); }
+    });
+    // Close the modal when clicking the dark backdrop.
+    document.getElementById('profile-modal').addEventListener('click', (e) => {
+      if (e.target.id === 'profile-modal') closeProfile();
+    });
+
+    // Format a stored "YYYY-MM-DDTHH:MM" deadline into a friendly local string.
+    function formatDue(s) {
+      const d = new Date(s);
+      return isNaN(d) ? s : d.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
     }
 
     // ---------------- MY TESTS ----------------
@@ -127,8 +221,8 @@
       tests.forEach((t) => {
         const item = el(`<div class="list-item">
           <div>
-            <h3>${escapeHtml(t.title)} ${t.negative_marking ? `<span class="pill amber">−${t.penalty} per wrong</span>` : ''}</h3>
-            <div class="muted" style="font-size:13px">${t.question_count} question(s) · assigned to ${t.assigned_count} student(s)</div>
+            <h3>${escapeHtml(t.title)} ${t.negative_marking ? `<span class="pill amber">−${t.penalty} per wrong</span>` : ''} ${t.closed ? '<span class="pill gray">closed</span>' : ''}</h3>
+            <div class="muted" style="font-size:13px">${t.question_count} question(s) · assigned to ${t.assigned_count} student(s)${t.due_date ? ' · Due ' + escapeHtml(formatDue(t.due_date)) : ''}</div>
           </div>
           <div class="row"></div>
         </div>`);
@@ -380,6 +474,7 @@
       editingTestId = null;
       document.getElementById('t-title').value = '';
       document.getElementById('t-desc').value = '';
+      document.getElementById('t-due').value = '';
       document.getElementById('t-negmark').checked = false;
       document.getElementById('t-penalty').value = 1;
       toggleNegMark();
@@ -405,6 +500,7 @@
       editingTestId = test.id;
       document.getElementById('t-title').value = test.title;
       document.getElementById('t-desc').value = test.description || '';
+      document.getElementById('t-due').value = test.due_date || '';
       document.getElementById('t-negmark').checked = !!test.negative_marking;
       document.getElementById('t-penalty').value = test.penalty > 0 ? test.penalty : 1;
       toggleNegMark();
@@ -421,7 +517,7 @@
       const banner = document.getElementById('edit-banner');
       banner.classList.remove('hidden');
       banner.textContent = t.submitted_count > 0
-        ? `Note: ${t.submitted_count} student(s) already submitted this test. Saving changes will clear their results so scores stay consistent with the new questions.`
+        ? `Note: ${t.submitted_count} student(s) already submitted. Their results are preserved with the original questions; your changes apply only to students who haven't taken it yet.`
         : 'You are editing an existing test.';
       document.getElementById('cancel-edit-btn').classList.remove('hidden');
       showTab('create');
@@ -435,6 +531,7 @@
     async function saveTest() {
       const title = document.getElementById('t-title').value.trim();
       const description = document.getElementById('t-desc').value.trim();
+      const dueDate = document.getElementById('t-due').value;
       const negativeMarking = document.getElementById('t-negmark').checked;
       const penalty = Number(document.getElementById('t-penalty').value) || 1;
       const questions = [];
@@ -464,14 +561,14 @@
       }
       try {
         if (editingTestId) {
-          const r = await api('/api/tests/' + editingTestId, 'PUT', { title, description, questions, negativeMarking, penalty });
+          const r = await api('/api/tests/' + editingTestId, 'PUT', { title, description, questions, negativeMarking, penalty, dueDate });
           let note = 'Test updated! See it under "My Tests".';
-          if (r.clearedAttempts > 0)
-            note += ` ${r.clearedAttempts} earlier submission(s) were cleared because the questions changed.`;
+          if (r.keptAttempts > 0)
+            note += ` ${r.keptAttempts} existing student submission(s) were preserved.`;
           resetCreateForm();
           showMsg('create-msg', note, 'ok');
         } else {
-          await api('/api/tests', 'POST', { title, description, questions, negativeMarking, penalty });
+          await api('/api/tests', 'POST', { title, description, questions, negativeMarking, penalty, dueDate });
           resetCreateForm();
           showMsg('create-msg', 'Test saved! See it under "My Tests".', 'ok');
         }
@@ -545,6 +642,59 @@
           const toggle = el(`<button class="btn ${s.disabled ? 'secondary' : 'danger'} small" style="margin-left:8px">${s.disabled ? 'Enable' : 'Disable'}</button>`);
           toggle.onclick = () => toggleStudent(s.studentId, !s.disabled);
           statusCell.append(toggle);
+        }
+        tb.append(tr);
+      });
+      box.append(table);
+    }
+
+    // ---------------- TEACHERS (root only) ----------------
+    async function addTeacher() {
+      const name = document.getElementById('teach-name').value.trim();
+      const email = document.getElementById('teach-email').value.trim();
+      const phone = document.getElementById('teach-phone').value.trim();
+      const isRoot = document.getElementById('teach-role').value === 'root';
+      try {
+        await api('/api/teachers', 'POST', { name, email, phone, isRoot });
+        document.getElementById('teach-name').value = '';
+        document.getElementById('teach-email').value = '';
+        document.getElementById('teach-phone').value = '';
+        document.getElementById('teach-role').value = 'teacher';
+        showMsg('teacher-msg', 'Teacher created! Use the "Copy link" button below to share their signup link.', 'ok');
+        loadTeachers();
+      } catch (err) { showMsg('teacher-msg', err.message); }
+    }
+
+    async function loadTeachers() {
+      const { teachers } = await api('/api/teachers');
+      const box = document.getElementById('teachers-list');
+      if (teachers.length === 0) { box.innerHTML = '<p class="muted">No teachers yet.</p>'; return; }
+      box.innerHTML = '';
+      const table = el(`<table>
+        <thead><tr><th>Name</th><th>Email</th><th>Mobile number</th><th>Role</th><th>Signup link</th></tr></thead>
+        <tbody></tbody>
+      </table>`);
+      const tb = table.querySelector('tbody');
+      teachers.forEach((t) => {
+        const tr = el(`<tr>
+          <td>${escapeHtml(t.name)}${t.isSelf ? ' <span class="muted">(you)</span>' : ''}</td>
+          <td>${escapeHtml(t.email)}</td>
+          <td>${t.phone ? escapeHtml(t.phone) : '<span class="muted">—</span>'}</td>
+          <td>${t.isRoot ? '<span class="pill brand">Root teacher</span>' : '<span class="pill gray">Teacher</span>'}</td>
+          <td class="link-cell"></td>
+        </tr>`);
+        const linkCell = tr.querySelector('.link-cell');
+        if (t.signedUp) {
+          linkCell.innerHTML = '<span class="pill green">signed up</span>';
+        } else {
+          const link = location.origin + t.signupPath;
+          const btn = el('<button class="btn secondary small">Copy link</button>');
+          btn.onclick = () => {
+            navigator.clipboard.writeText(link);
+            btn.textContent = 'Copied!';
+            setTimeout(() => { btn.textContent = 'Copy link'; }, 1500);
+          };
+          linkCell.append(btn);
         }
         tb.append(tr);
       });

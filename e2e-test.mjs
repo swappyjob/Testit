@@ -1,5 +1,5 @@
 // Quick end-to-end test of the whole flow. Run while the server is up.
-const BASE = 'http://localhost:3000';
+const BASE = process.env.TEST_BASE || 'http://localhost:3000';
 
 function makeJar() {
   const jar = {};

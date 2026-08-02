@@ -84,7 +84,15 @@ function startSession(res, userId) {
   res.cookie('sid', token, { httpOnly: true, sameSite: 'lax', maxAge: 1000 * 60 * 60 * 24 * 7 });
 }
 
-const publicUser = (u) => ({ id: u.id, role: u.role, name: u.name, email: u.email });
+const publicUser = (u) => ({ id: u.id, role: u.role, name: u.name, email: u.email, isRoot: !!u.is_root });
+
+// Root teachers can manage other teachers.
+function requireRoot(req, res, next) {
+  if (!req.user) return res.status(401).json({ error: 'Please log in.' });
+  if (req.user.role !== 'teacher' || !req.user.is_root)
+    return res.status(403).json({ error: 'Only root teachers can do that.' });
+  next();
+}
 
 // ============================================================================
 // AUTH
@@ -100,11 +108,15 @@ app.post('/api/register-teacher', (req, res) => {
   const exists = db.prepare('SELECT id FROM users WHERE email = ?').get(email);
   if (exists) return res.status(409).json({ error: 'An account with that email already exists.' });
 
+  // Bootstrap: while no root teacher exists yet, the next teacher to register
+  // becomes the root teacher (who can then invite others).
+  const rootExists = db.prepare("SELECT 1 FROM users WHERE role = 'teacher' AND is_root = 1 LIMIT 1").get();
+  const isRoot = rootExists ? 0 : 1;
   const info = db.prepare(
-    'INSERT INTO users (role, name, email, password_hash) VALUES (?, ?, ?, ?)'
-  ).run('teacher', name, email, hashPassword(password));
+    'INSERT INTO users (role, name, email, password_hash, is_root) VALUES (?, ?, ?, ?, ?)'
+  ).run('teacher', name, email, hashPassword(password), isRoot);
   startSession(res, Number(info.lastInsertRowid));
-  res.json({ user: { id: Number(info.lastInsertRowid), role: 'teacher', name, email } });
+  res.json({ user: { id: Number(info.lastInsertRowid), role: 'teacher', name, email, isRoot: !!isRoot } });
 });
 
 app.post('/api/login', (req, res) => {
@@ -128,6 +140,22 @@ app.post('/api/logout', (req, res) => {
 
 app.get('/api/me', (req, res) => {
   res.json({ user: req.user ? publicUser(req.user) : null });
+});
+
+// Change your own password (any logged-in user).
+app.post('/api/change-password', requireAuth(), (req, res) => {
+  const currentPassword = req.body.currentPassword || '';
+  const newPassword = req.body.newPassword || '';
+  if (newPassword.length < 6)
+    return res.status(400).json({ error: 'New password must be at least 6 characters.' });
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
+  if (!verifyPassword(currentPassword, user.password_hash))
+    return res.status(403).json({ error: 'Your current password is incorrect.' });
+  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hashPassword(newPassword), req.user.id);
+  // Log out everywhere else — keep only the current session valid.
+  const sid = parseCookies(req).sid;
+  db.prepare('DELETE FROM sessions WHERE user_id = ? AND token != ?').run(req.user.id, sid);
+  res.json({ ok: true });
 });
 
 // ============================================================================
@@ -160,7 +188,7 @@ app.get('/api/students', requireAuth('teacher'), (req, res) => {
     `SELECT t.name, t.email, t.phone, t.token, t.used, t.student_id, u.disabled
        FROM signup_tokens t
        LEFT JOIN users u ON u.id = t.student_id
-      WHERE t.teacher_id = ?`;
+      WHERE t.teacher_id = ? AND t.invite_role = 'student'`;
   let invites;
   if (q) {
     // Escape LIKE wildcards so the user's text is matched literally.
@@ -189,7 +217,7 @@ app.get('/api/students/export.csv', requireAuth('teacher'), (req, res) => {
     `SELECT t.name, t.email, t.phone, t.used, u.disabled, t.created_at
        FROM signup_tokens t
        LEFT JOIN users u ON u.id = t.student_id
-      WHERE t.teacher_id = ? ORDER BY t.created_at DESC`
+      WHERE t.teacher_id = ? AND t.invite_role = 'student' ORDER BY t.created_at DESC`
   ).all(req.user.id);
 
   const esc = (v) => {
@@ -225,12 +253,57 @@ app.patch('/api/students/:id', requireAuth('teacher'), (req, res) => {
   res.json({ ok: true, disabled: !!disabled });
 });
 
+// ============================================================================
+// TEACHERS  (root teachers can invite other teachers)
+// ============================================================================
+app.post('/api/teachers', requireRoot, (req, res) => {
+  const name = (req.body.name || '').trim();
+  const email = (req.body.email || '').trim().toLowerCase();
+  const phone = (req.body.phone || '').trim();
+  const makeRoot = req.body.isRoot ? 1 : 0;
+  if (!name || !email) return res.status(400).json({ error: 'Teacher name and email are required.' });
+  if (!phone) return res.status(400).json({ error: 'Teacher phone number is required.' });
+  if (!/^[\d+()\-\s]{6,20}$/.test(phone))
+    return res.status(400).json({ error: 'Please enter a valid phone number.' });
+  if (db.prepare('SELECT id FROM users WHERE email = ?').get(email))
+    return res.status(409).json({ error: 'A user with that email already exists.' });
+  if (db.prepare('SELECT id FROM signup_tokens WHERE email = ? AND used = 0').get(email))
+    return res.status(409).json({ error: 'A pending invite for that email already exists.' });
+
+  const token = randomToken();
+  db.prepare(
+    "INSERT INTO signup_tokens (token, name, email, phone, invite_role, is_root, teacher_id) VALUES (?, ?, ?, ?, 'teacher', ?, ?)"
+  ).run(token, name, email, phone, makeRoot, req.user.id);
+  res.json({ token, signupPath: `/signup.html?token=${token}` });
+});
+
+// List all teachers plus pending teacher invites (root view).
+app.get('/api/teachers', requireRoot, (req, res) => {
+  const signedUp = db.prepare(
+    "SELECT id, name, email, phone, is_root, disabled FROM users WHERE role = 'teacher' ORDER BY id"
+  ).all();
+  const pending = db.prepare(
+    "SELECT name, email, phone, is_root, token FROM signup_tokens WHERE invite_role = 'teacher' AND used = 0 ORDER BY created_at DESC"
+  ).all();
+  const teachers = [
+    ...signedUp.map((u) => ({
+      name: u.name, email: u.email, phone: u.phone, isRoot: !!u.is_root, disabled: !!u.disabled,
+      signedUp: true, isSelf: u.id === req.user.id, signupPath: null,
+    })),
+    ...pending.map((p) => ({
+      name: p.name, email: p.email, phone: p.phone, isRoot: !!p.is_root, disabled: false,
+      signedUp: false, isSelf: false, signupPath: `/signup.html?token=${p.token}`,
+    })),
+  ];
+  res.json({ teachers });
+});
+
 // Validate a signup token (used by the signup page to pre-fill name/email).
 app.get('/api/signup/:token', (req, res) => {
   const t = db.prepare('SELECT * FROM signup_tokens WHERE token = ?').get(req.params.token);
   if (!t) return res.status(404).json({ error: 'This signup link is invalid.' });
   if (t.used) return res.status(410).json({ error: 'This signup link has already been used.' });
-  res.json({ name: t.name, email: t.email });
+  res.json({ name: t.name, email: t.email, role: t.invite_role, isRoot: !!t.is_root });
 });
 
 // Complete signup: student sets a password.
@@ -243,13 +316,15 @@ app.post('/api/signup/:token', (req, res) => {
   if (db.prepare('SELECT id FROM users WHERE email = ?').get(t.email))
     return res.status(409).json({ error: 'An account with that email already exists.' });
 
+  const role = t.invite_role === 'teacher' ? 'teacher' : 'student';
+  const isRoot = role === 'teacher' && t.is_root ? 1 : 0;
   const info = db.prepare(
-    'INSERT INTO users (role, name, email, phone, password_hash) VALUES (?, ?, ?, ?, ?)'
-  ).run('student', t.name, t.email, t.phone, hashPassword(password));
-  const studentId = Number(info.lastInsertRowid);
-  db.prepare('UPDATE signup_tokens SET used = 1, student_id = ? WHERE id = ?').run(studentId, t.id);
-  startSession(res, studentId);
-  res.json({ user: { id: studentId, role: 'student', name: t.name, email: t.email } });
+    'INSERT INTO users (role, name, email, phone, password_hash, is_root) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(role, t.name, t.email, t.phone, hashPassword(password), isRoot);
+  const newId = Number(info.lastInsertRowid);
+  db.prepare('UPDATE signup_tokens SET used = 1, student_id = ? WHERE id = ?').run(newId, t.id);
+  startSession(res, newId);
+  res.json({ user: { id: newId, role, name: t.name, email: t.email, isRoot: !!isRoot } });
 });
 
 // ============================================================================
@@ -314,6 +389,20 @@ app.post('/api/upload', requireAuth('teacher'), (req, res) => {
   res.json({ url: '/uploads/' + name });
 });
 
+// A test is closed once its deadline (if any) is in the past.
+function isClosed(dueDate) {
+  if (!dueDate) return false;
+  const t = new Date(dueDate).getTime();
+  return Number.isFinite(t) && t < Date.now();
+}
+
+// Keep only a valid datetime-local string (YYYY-MM-DDTHH:MM), else ''.
+function readDueDate(body) {
+  const d = (body.dueDate || '').trim();
+  if (!d) return '';
+  return Number.isFinite(new Date(d).getTime()) ? d : '';
+}
+
 // Normalize the negative-marking settings from a request body.
 function readMarking(body) {
   const on = body.negativeMarking ? 1 : 0;
@@ -330,11 +419,12 @@ app.post('/api/tests', requireAuth('teacher'), (req, res) => {
   const invalid = validateQuestions(questions);
   if (invalid) return res.status(400).json({ error: invalid });
   const { negative_marking, penalty } = readMarking(req.body);
+  const dueDate = readDueDate(req.body);
 
   const testId = transaction(() => {
     const newId = Number(db.prepare(
-      'INSERT INTO tests (teacher_id, title, description, negative_marking, penalty) VALUES (?, ?, ?, ?, ?)'
-    ).run(req.user.id, title, description, negative_marking, penalty).lastInsertRowid);
+      'INSERT INTO tests (teacher_id, title, description, negative_marking, penalty, due_date) VALUES (?, ?, ?, ?, ?, ?)'
+    ).run(req.user.id, title, description, negative_marking, penalty, dueDate).lastInsertRowid);
     writeQuestions(newId, questions);
     return newId;
   });
@@ -353,34 +443,44 @@ app.put('/api/tests/:id', requireAuth('teacher'), (req, res) => {
   const invalid = validateQuestions(questions);
   if (invalid) return res.status(400).json({ error: invalid });
   const { negative_marking, penalty } = readMarking(req.body);
+  const dueDate = readDueDate(req.body);
 
-  const clearedAttempts = transaction(() => {
-    // Removing attempts also cascade-deletes their answers; assignments are kept.
-    const cleared = db.prepare('DELETE FROM attempts WHERE test_id = ?').run(test.id).changes;
-    db.prepare('DELETE FROM questions WHERE test_id = ?').run(test.id);
-    db.prepare('UPDATE tests SET title = ?, description = ?, negative_marking = ?, penalty = ? WHERE id = ?')
-      .run(title, description, negative_marking, penalty, test.id);
-    writeQuestions(test.id, questions);
-    return cleared;
+  const keptAttempts = transaction(() => {
+    // Preserve students' past attempts. Any current question that a student has
+    // already answered is ARCHIVED (kept so old results still show the exact
+    // questions/scores). Current questions with no answers can be safely removed.
+    const current = db.prepare('SELECT id FROM questions WHERE test_id = ? AND archived = 0').all(test.id);
+    const hasAnswers = db.prepare('SELECT 1 FROM answers WHERE question_id = ? LIMIT 1');
+    const archive = db.prepare('UPDATE questions SET archived = 1 WHERE id = ?');
+    const remove = db.prepare('DELETE FROM questions WHERE id = ?');
+    for (const q of current) {
+      if (hasAnswers.get(q.id)) archive.run(q.id);
+      else remove.run(q.id);
+    }
+    db.prepare('UPDATE tests SET title = ?, description = ?, negative_marking = ?, penalty = ?, due_date = ? WHERE id = ?')
+      .run(title, description, negative_marking, penalty, dueDate, test.id);
+    writeQuestions(test.id, questions); // inserts the new version as active (archived = 0)
+    return db.prepare('SELECT COUNT(*) AS c FROM attempts WHERE test_id = ? AND submitted_at IS NOT NULL').get(test.id).c;
   });
-  res.json({ id: test.id, clearedAttempts });
+  res.json({ id: test.id, keptAttempts });
 });
 
 app.get('/api/tests', requireAuth('teacher'), (req, res) => {
   const tests = db.prepare(
-    `SELECT t.id, t.title, t.description, t.negative_marking, t.penalty, t.created_at,
-            (SELECT COUNT(*) FROM questions q WHERE q.test_id = t.id) AS question_count,
+    `SELECT t.id, t.title, t.description, t.negative_marking, t.penalty, t.due_date, t.created_at,
+            (SELECT COUNT(*) FROM questions q WHERE q.test_id = t.id AND q.archived = 0) AS question_count,
             (SELECT COUNT(*) FROM assignments a WHERE a.test_id = t.id) AS assigned_count,
             (SELECT COUNT(*) FROM attempts at WHERE at.test_id = t.id AND at.submitted_at IS NOT NULL) AS submitted_count
        FROM tests t WHERE t.teacher_id = ? ORDER BY t.created_at DESC`
   ).all(req.user.id);
+  tests.forEach((t) => { t.closed = isClosed(t.due_date); });
   res.json({ tests });
 });
 
 app.get('/api/tests/:id', requireAuth('teacher'), (req, res) => {
   const test = db.prepare('SELECT * FROM tests WHERE id = ? AND teacher_id = ?').get(req.params.id, req.user.id);
   if (!test) return res.status(404).json({ error: 'Test not found.' });
-  const questions = db.prepare('SELECT * FROM questions WHERE test_id = ? ORDER BY position').all(test.id)
+  const questions = db.prepare('SELECT * FROM questions WHERE test_id = ? AND archived = 0 ORDER BY position').all(test.id)
     .map((q) => ({ ...q, options: JSON.parse(q.options_json) }));
   res.json({ test, questions });
 });
@@ -431,8 +531,8 @@ app.get('/api/tests/:id/assignments', requireAuth('teacher'), (req, res) => {
 // ============================================================================
 app.get('/api/my-assignments', requireAuth('student'), (req, res) => {
   const rows = db.prepare(
-    `SELECT a.id AS assignment_id, t.id AS test_id, t.title, t.description,
-            (SELECT COUNT(*) FROM questions q WHERE q.test_id = t.id) AS question_count,
+    `SELECT a.id AS assignment_id, t.id AS test_id, t.title, t.description, t.due_date,
+            (SELECT COUNT(*) FROM questions q WHERE q.test_id = t.id AND q.archived = 0) AS question_count,
             at.id AS attempt_id, at.submitted_at, at.auto_score, at.manual_score,
             at.max_score, at.needs_grading
        FROM assignments a
@@ -451,6 +551,8 @@ app.get('/api/my-assignments', requireAuth('student'), (req, res) => {
     needsGrading: !!r.needs_grading,
     score: r.submitted_at ? r.auto_score + r.manual_score : null,
     maxScore: r.max_score,
+    dueDate: r.due_date,
+    closed: isClosed(r.due_date),
   }));
   res.json({ assignments });
 });
@@ -464,8 +566,10 @@ app.get('/api/take/:assignmentId', requireAuth('student'), (req, res) => {
   if (existing && existing.submitted_at)
     return res.status(409).json({ error: 'You have already submitted this test.' });
 
-  const test = db.prepare('SELECT id, title, description, negative_marking, penalty FROM tests WHERE id = ?').get(a.test_id);
-  const questions = db.prepare('SELECT id, type, prompt, options_json, image_url, points FROM questions WHERE test_id = ? ORDER BY position')
+  const test = db.prepare('SELECT id, title, description, negative_marking, penalty, due_date FROM tests WHERE id = ?').get(a.test_id);
+  if (isClosed(test.due_date))
+    return res.status(403).json({ error: 'The deadline for this test has passed. You can no longer take it.' });
+  const questions = db.prepare('SELECT id, type, prompt, options_json, image_url, points FROM questions WHERE test_id = ? AND archived = 0 ORDER BY position')
     .all(a.test_id)
     .map((q) => ({ id: q.id, type: q.type, prompt: q.prompt, points: q.points, image: q.image_url, options: JSON.parse(q.options_json) }));
   res.json({ test, questions });
@@ -480,8 +584,10 @@ app.post('/api/submit/:assignmentId', requireAuth('student'), (req, res) => {
   if (existing && existing.submitted_at)
     return res.status(409).json({ error: 'You have already submitted this test.' });
 
-  const test = db.prepare('SELECT negative_marking, penalty FROM tests WHERE id = ?').get(a.test_id);
-  const questions = db.prepare('SELECT * FROM questions WHERE test_id = ? ORDER BY position').all(a.test_id);
+  const test = db.prepare('SELECT negative_marking, penalty, due_date FROM tests WHERE id = ?').get(a.test_id);
+  if (isClosed(test.due_date))
+    return res.status(403).json({ error: 'The deadline for this test has passed. Your submission was not accepted.' });
+  const questions = db.prepare('SELECT * FROM questions WHERE test_id = ? AND archived = 0 ORDER BY position').all(a.test_id);
   const responses = req.body.answers || {}; // { questionId: response }
 
   let autoScore = 0;

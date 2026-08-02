@@ -5,7 +5,9 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const db = new DatabaseSync(path.join(__dirname, 'data.db'));
+// The DB file can be overridden (e.g. a throwaway DB for tests) via TESTIT_DB.
+const DB_FILE = process.env.TESTIT_DB || 'data.db';
+const db = new DatabaseSync(path.isAbsolute(DB_FILE) ? DB_FILE : path.join(__dirname, DB_FILE));
 
 // Recommended pragmas for a small web app.
 db.exec('PRAGMA journal_mode = WAL;');
@@ -21,6 +23,7 @@ CREATE TABLE IF NOT EXISTS users (
   phone         TEXT NOT NULL DEFAULT '',
   password_hash TEXT NOT NULL,
   disabled      INTEGER NOT NULL DEFAULT 0,
+  is_root       INTEGER NOT NULL DEFAULT 0,   -- root teachers can add other teachers
   created_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -31,6 +34,8 @@ CREATE TABLE IF NOT EXISTS signup_tokens (
   name        TEXT NOT NULL,
   email       TEXT NOT NULL,
   phone       TEXT NOT NULL DEFAULT '',
+  invite_role TEXT NOT NULL DEFAULT 'student', -- 'student' or 'teacher'
+  is_root     INTEGER NOT NULL DEFAULT 0,      -- for teacher invites: make them a root teacher
   teacher_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   used        INTEGER NOT NULL DEFAULT 0,
   student_id  INTEGER REFERENCES users(id) ON DELETE SET NULL,
@@ -44,6 +49,7 @@ CREATE TABLE IF NOT EXISTS tests (
   description      TEXT NOT NULL DEFAULT '',
   negative_marking INTEGER NOT NULL DEFAULT 0,  -- 1 = deduct marks for wrong answers
   penalty          INTEGER NOT NULL DEFAULT 0,  -- marks deducted per wrong auto-graded answer
+  due_date         TEXT NOT NULL DEFAULT '',    -- optional deadline (YYYY-MM-DDTHH:MM); '' = none
   created_at       TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -56,7 +62,8 @@ CREATE TABLE IF NOT EXISTS questions (
   correct_answer TEXT NOT NULL DEFAULT '',    -- index for mcq, 'true'/'false', '' for short
   image_url      TEXT NOT NULL DEFAULT '',    -- optional image attached to the question
   points         INTEGER NOT NULL DEFAULT 1,
-  position       INTEGER NOT NULL DEFAULT 0
+  position       INTEGER NOT NULL DEFAULT 0,
+  archived       INTEGER NOT NULL DEFAULT 0   -- 1 = old version kept only for past attempts' history
 );
 
 CREATE TABLE IF NOT EXISTS assignments (
@@ -107,9 +114,14 @@ function ensureColumn(table, column, definition) {
 }
 ensureColumn('tests', 'negative_marking', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('tests', 'penalty', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('tests', 'due_date', "TEXT NOT NULL DEFAULT ''");
 ensureColumn('questions', 'image_url', "TEXT NOT NULL DEFAULT ''");
+ensureColumn('questions', 'archived', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('users', 'phone', "TEXT NOT NULL DEFAULT ''");
 ensureColumn('users', 'disabled', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('users', 'is_root', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('signup_tokens', 'phone', "TEXT NOT NULL DEFAULT ''");
+ensureColumn('signup_tokens', 'invite_role', "TEXT NOT NULL DEFAULT 'student'");
+ensureColumn('signup_tokens', 'is_root', 'INTEGER NOT NULL DEFAULT 0');
 
 export default db;
