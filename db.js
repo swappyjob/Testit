@@ -101,6 +101,7 @@ async function init() {
       negative_marking INTEGER NOT NULL DEFAULT 0,
       penalty          INTEGER NOT NULL DEFAULT 0,
       due_date         TEXT NOT NULL DEFAULT '',
+      duration_minutes INTEGER NOT NULL DEFAULT 0,
       created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
@@ -163,6 +164,9 @@ async function init() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
   `);
+
+  // Forward-compatible column additions for databases created earlier.
+  await pool.query('ALTER TABLE tests ADD COLUMN IF NOT EXISTS duration_minutes INTEGER NOT NULL DEFAULT 0');
 }
 
 export { pool, all, get, run, tx, init };

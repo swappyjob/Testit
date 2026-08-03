@@ -512,6 +512,12 @@ function readMarking(body) {
   return { negative_marking: on, penalty: on ? penalty : 0 };
 }
 
+// Time limit in minutes (0 = no timer).
+function readDuration(body) {
+  const d = Math.round(Number(body.durationMinutes));
+  return Number.isFinite(d) && d > 0 ? d : 0;
+}
+
 app.post('/api/tests', requireAuth('teacher'), h(async (req, res) => {
   const title = (req.body.title || '').trim();
   const description = (req.body.description || '').trim();
@@ -521,11 +527,12 @@ app.post('/api/tests', requireAuth('teacher'), h(async (req, res) => {
   if (invalid) return res.status(400).json({ error: invalid });
   const { negative_marking, penalty } = readMarking(req.body);
   const dueDate = readDueDate(req.body);
+  const duration = readDuration(req.body);
 
   const testId = await tx(async (t) => {
     const newId = (await t.run(
-      'INSERT INTO tests (teacher_id, title, description, negative_marking, penalty, due_date) VALUES (?, ?, ?, ?, ?, ?) RETURNING id',
-      [req.user.id, title, description, negative_marking, penalty, dueDate]
+      'INSERT INTO tests (teacher_id, title, description, negative_marking, penalty, due_date, duration_minutes) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id',
+      [req.user.id, title, description, negative_marking, penalty, dueDate, duration]
     )).rows[0].id;
     await writeQuestions(t.run, newId, questions);
     return newId;
@@ -545,6 +552,7 @@ app.put('/api/tests/:id', requireAuth('teacher'), h(async (req, res) => {
   if (invalid) return res.status(400).json({ error: invalid });
   const { negative_marking, penalty } = readMarking(req.body);
   const dueDate = readDueDate(req.body);
+  const duration = readDuration(req.body);
 
   const keptAttempts = await tx(async (t) => {
     // Archive any answered current question (so old results keep their exact
@@ -556,8 +564,8 @@ app.put('/api/tests/:id', requireAuth('teacher'), h(async (req, res) => {
       else await t.run('DELETE FROM questions WHERE id = ?', [q.id]);
     }
     await t.run(
-      'UPDATE tests SET title = ?, description = ?, negative_marking = ?, penalty = ?, due_date = ? WHERE id = ?',
-      [title, description, negative_marking, penalty, dueDate, test.id]
+      'UPDATE tests SET title = ?, description = ?, negative_marking = ?, penalty = ?, due_date = ?, duration_minutes = ? WHERE id = ?',
+      [title, description, negative_marking, penalty, dueDate, duration, test.id]
     );
     await writeQuestions(t.run, test.id, questions);
     return (await t.get("SELECT COUNT(*) AS c FROM attempts WHERE test_id = ? AND submitted_at IS NOT NULL", [test.id])).c;
@@ -567,7 +575,7 @@ app.put('/api/tests/:id', requireAuth('teacher'), h(async (req, res) => {
 
 app.get('/api/tests', requireAuth('teacher'), h(async (req, res) => {
   const tests = await all(
-    `SELECT t.id, t.title, t.description, t.negative_marking, t.penalty, t.due_date, t.created_at,
+    `SELECT t.id, t.title, t.description, t.negative_marking, t.penalty, t.due_date, t.duration_minutes, t.created_at,
             (SELECT COUNT(*) FROM questions q WHERE q.test_id = t.id AND q.archived = 0) AS question_count,
             (SELECT COUNT(*) FROM assignments a WHERE a.test_id = t.id) AS assigned_count,
             (SELECT COUNT(*) FROM attempts at WHERE at.test_id = t.id AND at.submitted_at IS NOT NULL) AS submitted_count
@@ -667,18 +675,33 @@ app.get('/api/my-assignments', requireAuth('student'), h(async (req, res) => {
 app.get('/api/take/:assignmentId', requireAuth('student'), h(async (req, res) => {
   const a = await get('SELECT * FROM assignments WHERE id = ? AND student_id = ?', [req.params.assignmentId, req.user.id]);
   if (!a) return res.status(404).json({ error: 'Assignment not found.' });
-  const existing = await get('SELECT * FROM attempts WHERE assignment_id = ?', [a.id]);
-  if (existing && existing.submitted_at)
+  let attempt = await get('SELECT * FROM attempts WHERE assignment_id = ?', [a.id]);
+  if (attempt && attempt.submitted_at)
     return res.status(409).json({ error: 'You have already submitted this test.' });
 
-  const test = await get('SELECT id, title, description, negative_marking, penalty, due_date FROM tests WHERE id = ?', [a.test_id]);
+  const test = await get('SELECT id, title, description, negative_marking, penalty, due_date, duration_minutes FROM tests WHERE id = ?', [a.test_id]);
   if (isClosed(test.due_date))
     return res.status(403).json({ error: 'The deadline for this test has passed. You can no longer take it.' });
+
+  // For a timed test, anchor the countdown to a server-recorded start time.
+  // The first open creates an in-progress attempt; reopening resumes the same clock.
+  let remainingSeconds = null;
+  if (test.duration_minutes > 0) {
+    if (!attempt) {
+      attempt = (await run(
+        'INSERT INTO attempts (assignment_id, test_id, student_id) VALUES (?, ?, ?) RETURNING id, started_at',
+        [a.id, a.test_id, req.user.id]
+      )).rows[0];
+    }
+    const elapsed = (Date.now() - new Date(attempt.started_at).getTime()) / 1000;
+    remainingSeconds = Math.max(0, Math.round(test.duration_minutes * 60 - elapsed));
+  }
+
   const questions = (await all(
     'SELECT id, type, prompt, options_json, image_url, points FROM questions WHERE test_id = ? AND archived = 0 ORDER BY position',
     [a.test_id]
   )).map((q) => ({ id: q.id, type: q.type, prompt: q.prompt, points: q.points, image: q.image_url, options: JSON.parse(q.options_json) }));
-  res.json({ test, questions });
+  res.json({ test, questions, durationMinutes: test.duration_minutes, remainingSeconds });
 }));
 
 // Submit answers — auto-grade mcq/truefalse, flag short answers for the teacher.
@@ -717,11 +740,21 @@ app.post('/api/submit/:assignmentId', requireAuth('student'), h(async (req, res)
   }
 
   await tx(async (t) => {
-    const attemptId = (await t.run(
-      `INSERT INTO attempts (assignment_id, test_id, student_id, submitted_at, auto_score, manual_score, max_score, needs_grading)
-       VALUES (?, ?, ?, NOW(), ?, 0, ?, ?) RETURNING id`,
-      [a.id, a.test_id, req.user.id, autoScore, maxScore, needsGrading]
-    )).rows[0].id;
+    let attemptId;
+    if (existing) {
+      // Finalize the in-progress (timed) attempt.
+      attemptId = existing.id;
+      await t.run(
+        'UPDATE attempts SET submitted_at = NOW(), auto_score = ?, manual_score = 0, max_score = ?, needs_grading = ? WHERE id = ?',
+        [autoScore, maxScore, needsGrading, attemptId]
+      );
+    } else {
+      attemptId = (await t.run(
+        `INSERT INTO attempts (assignment_id, test_id, student_id, submitted_at, auto_score, manual_score, max_score, needs_grading)
+         VALUES (?, ?, ?, NOW(), ?, 0, ?, ?) RETURNING id`,
+        [a.id, a.test_id, req.user.id, autoScore, maxScore, needsGrading]
+      )).rows[0].id;
+    }
     for (const g of graded) {
       await t.run(
         'INSERT INTO answers (attempt_id, question_id, response, is_correct, points_awarded) VALUES (?, ?, ?, ?, ?)',

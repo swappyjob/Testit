@@ -23,6 +23,7 @@
         <h1 id="test-title"></h1>
         <p class="muted" id="test-desc"></p>
         <div id="negmark-warn" class="msg hidden" style="background:#fef3c7;color:#92400e"></div>
+        <div id="timer" class="hidden" style="font-weight:700; font-size:20px; margin-top:8px"></div>
       </div>
       <form id="test-form">
         <div id="questions"></div>
@@ -61,7 +62,7 @@
       if (!me) return;
       document.getElementById('who').textContent = me.name + ' · Student';
       try {
-        const { test, questions } = await api('/api/take/' + assignmentId);
+        const { test, questions, durationMinutes, remainingSeconds } = await api('/api/take/' + assignmentId);
         QUESTIONS = questions;
         document.getElementById('test-title').textContent = test.title;
         const desc = document.getElementById('test-desc');
@@ -78,10 +79,39 @@
         }
         renderQuestions(questions);
         document.getElementById('test-view').classList.remove('hidden');
+        startTimer(durationMinutes, remainingSeconds);
       } catch (err) {
         showMsg('msg', err.message);
       }
     })();
+
+    // ---- Countdown timer (server-anchored) with auto-submit ----
+    let timerInterval = null;
+    function startTimer(durationMinutes, remainingSeconds) {
+      if (!durationMinutes || remainingSeconds == null) return; // untimed test
+      const el = document.getElementById('timer');
+      el.classList.remove('hidden');
+      let remaining = remainingSeconds;
+      const render = () => {
+        const m = Math.floor(remaining / 60);
+        const s = remaining % 60;
+        el.textContent = `⏱ Time left: ${m}:${String(s).padStart(2, '0')}`;
+        el.style.color = remaining <= 30 ? 'var(--red)' : 'var(--brand)';
+      };
+      if (remaining <= 0) { render(); submitTest(true); return; }
+      render();
+      timerInterval = setInterval(() => {
+        remaining -= 1;
+        if (remaining <= 0) {
+          remaining = 0;
+          render();
+          clearInterval(timerInterval);
+          submitTest(true);
+        } else {
+          render();
+        }
+      }, 1000);
+    }
 
     function renderQuestions(questions) {
       const box = document.getElementById('questions');
@@ -130,26 +160,37 @@
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
 
-    document.getElementById('test-form').addEventListener('submit', async (e) => {
+    let submitting = false;
+    document.getElementById('test-form').addEventListener('submit', (e) => {
       e.preventDefault();
+      submitTest(false);
+    });
+
+    async function submitTest(auto) {
+      if (submitting) return;
+      if (!auto && !confirm('Submit your test? You cannot change answers after this.')) return;
+      submitting = true;
+      if (timerInterval) clearInterval(timerInterval);
       const answers = {};
       QUESTIONS.forEach((q) => {
         const field = document.querySelector(`[name="q${q.id}"]:checked`) || document.querySelector(`textarea[name="q${q.id}"]`);
         answers[q.id] = field ? field.value : '';
       });
-      if (!confirm('Submit your test? You cannot change answers after this.')) return;
       try {
         const r = await api('/api/submit/' + assignmentId, 'POST', { answers });
         document.getElementById('test-view').classList.add('hidden');
         document.getElementById('result-view').classList.remove('hidden');
-        if (r.needsGrading) {
-          document.getElementById('result-score').textContent = `Auto-graded score: ${r.autoScore} / ${r.maxScore}`;
-          document.getElementById('result-note').textContent = 'Some written answers still need to be graded by your teacher.';
-        } else {
-          document.getElementById('result-score').textContent = `Your score: ${r.autoScore} / ${r.maxScore}`;
-        }
-      } catch (err) { showMsg('msg', err.message); }
-    });
+        let note = auto ? "⏱ Time's up — your test was submitted automatically. " : '';
+        if (r.needsGrading) note += 'Some written answers still need to be graded by your teacher.';
+        document.getElementById('result-score').textContent = r.needsGrading
+          ? `Auto-graded score: ${r.autoScore} / ${r.maxScore}`
+          : `Your score: ${r.autoScore} / ${r.maxScore}`;
+        document.getElementById('result-note').textContent = note;
+      } catch (err) {
+        submitting = false;
+        showMsg('msg', err.message);
+      }
+    }
   </script>
 </body>
 </html>

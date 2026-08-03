@@ -72,6 +72,10 @@
         <input type="datetime-local" id="t-due" style="width:auto">
         <p class="muted" style="font-size:13px;margin:6px 0 0">After this moment, students can no longer open or submit the test. Leave blank for no deadline.</p>
 
+        <label>Time limit in minutes (optional timer)</label>
+        <input type="number" id="t-duration" min="0" step="1" placeholder="0 = no timer" style="width:180px">
+        <p class="muted" style="font-size:13px;margin:6px 0 0">Each student's timer starts when they open the test and it auto-submits when time runs out. Leave 0 for no timer.</p>
+
         <div class="q-card" style="margin-top:16px">
           <label class="choice" style="font-weight:600">
             <input type="checkbox" id="t-negmark" onchange="toggleNegMark()">
@@ -221,7 +225,7 @@
       tests.forEach((t) => {
         const item = el(`<div class="list-item">
           <div>
-            <h3>${escapeHtml(t.title)} ${t.negative_marking ? `<span class="pill amber">−${t.penalty} per wrong</span>` : ''} ${t.closed ? '<span class="pill gray">closed</span>' : ''}</h3>
+            <h3>${escapeHtml(t.title)} ${t.negative_marking ? `<span class="pill amber">−${t.penalty} per wrong</span>` : ''} ${t.duration_minutes ? `<span class="pill brand">⏱ ${t.duration_minutes} min</span>` : ''} ${t.closed ? '<span class="pill gray">closed</span>' : ''}</h3>
             <div class="muted" style="font-size:13px">${t.question_count} question(s) · assigned to ${t.assigned_count} student(s)${t.due_date ? ' · Due ' + escapeHtml(formatDue(t.due_date)) : ''}</div>
           </div>
           <div class="row"></div>
@@ -475,6 +479,7 @@
       document.getElementById('t-title').value = '';
       document.getElementById('t-desc').value = '';
       document.getElementById('t-due').value = '';
+      document.getElementById('t-duration').value = '';
       document.getElementById('t-negmark').checked = false;
       document.getElementById('t-penalty').value = 1;
       toggleNegMark();
@@ -501,6 +506,7 @@
       document.getElementById('t-title').value = test.title;
       document.getElementById('t-desc').value = test.description || '';
       document.getElementById('t-due').value = test.due_date || '';
+      document.getElementById('t-duration').value = test.duration_minutes || '';
       document.getElementById('t-negmark').checked = !!test.negative_marking;
       document.getElementById('t-penalty').value = test.penalty > 0 ? test.penalty : 1;
       toggleNegMark();
@@ -532,6 +538,7 @@
       const title = document.getElementById('t-title').value.trim();
       const description = document.getElementById('t-desc').value.trim();
       const dueDate = document.getElementById('t-due').value;
+      const durationMinutes = Number(document.getElementById('t-duration').value) || 0;
       const negativeMarking = document.getElementById('t-negmark').checked;
       const penalty = Number(document.getElementById('t-penalty').value) || 1;
       const questions = [];
@@ -561,14 +568,14 @@
       }
       try {
         if (editingTestId) {
-          const r = await api('/api/tests/' + editingTestId, 'PUT', { title, description, questions, negativeMarking, penalty, dueDate });
+          const r = await api('/api/tests/' + editingTestId, 'PUT', { title, description, questions, negativeMarking, penalty, dueDate, durationMinutes });
           let note = 'Test updated! See it under "My Tests".';
           if (r.keptAttempts > 0)
             note += ` ${r.keptAttempts} existing student submission(s) were preserved.`;
           resetCreateForm();
           showMsg('create-msg', note, 'ok');
         } else {
-          await api('/api/tests', 'POST', { title, description, questions, negativeMarking, penalty, dueDate });
+          await api('/api/tests', 'POST', { title, description, questions, negativeMarking, penalty, dueDate, durationMinutes });
           resetCreateForm();
           showMsg('create-msg', 'Test saved! See it under "My Tests".', 'ok');
         }
