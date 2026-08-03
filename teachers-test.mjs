@@ -70,9 +70,12 @@ ok('invited teacher signs up and keeps their phone');
 
 const made = await call(normal, '/api/tests', 'POST', { title: 'T', questions: [{ type: 'mcq', prompt: 'q', options: ['a', 'b'], correct: 0, points: 1 }] });
 if (made.status !== 200) throw new Error('normal teacher should be able to create tests');
-let r = await call(normal, '/api/teachers', 'GET', undefined, false);
-if (r.status !== 403) throw new Error('normal teacher listing teachers should be 403');
-ok('normal teacher can make tests but is blocked from the Teachers module (403)');
+// A normal teacher CAN view the roster, but cannot manage it.
+const normalView = await call(normal, '/api/teachers');
+if (normalView.status !== 200 || normalView.data.canManage) throw new Error('normal teacher should view roster without manage rights');
+if ((await call(normal, '/api/teachers', 'POST', { name: 'X', email: `x${rand}@x.com`, phone: '9', isRoot: false }, false)).status !== 403)
+  throw new Error('normal teacher adding a teacher should be 403');
+ok('normal teacher can view the roster but cannot add teachers (403)');
 
 // Root-invited teacher signs up as root and can manage teachers
 const boss = makeJar();
@@ -83,8 +86,35 @@ if (bossAdd.status !== 200) throw new Error('root teacher should be able to add 
 ok('invited root teacher can manage teachers too');
 
 // Duplicate email rejected
-r = await call(root, '/api/teachers', 'POST', { name: 'Dup', email: `nt${rand}@x.com`, phone: '9000000004' }, false);
+let r = await call(root, '/api/teachers', 'POST', { name: 'Dup', email: `nt${rand}@x.com`, phone: '9000000004' }, false);
 if (r.status !== 409) throw new Error('duplicate email should be 409');
 ok('duplicate email rejected');
+
+// --- Disabling teachers (root only) ---
+const normalId = (await call(root, '/api/teachers')).data.teachers.find((t) => t.email === `nt${rand}@x.com`).id;
+
+// A non-root teacher cannot disable anyone.
+if ((await call(normal, '/api/teachers/' + normalId, 'PATCH', { disabled: true }, false)).status !== 403)
+  throw new Error('non-root disabling a teacher should be 403');
+ok('non-root teacher cannot disable teachers (403)');
+
+// Root cannot disable their own account.
+if ((await call(root, '/api/teachers/' + me.id, 'PATCH', { disabled: true }, false)).status !== 400)
+  throw new Error('root disabling self should be 400');
+ok('root cannot disable their own account');
+
+// Root disables the normal teacher -> logged out + cannot log in.
+if ((await call(root, '/api/teachers/' + normalId, 'PATCH', { disabled: true })).status !== 200)
+  throw new Error('root should disable a teacher');
+if ((await call(normal, '/api/me')).data.user !== null) throw new Error('disabled teacher session should be revoked');
+if ((await call(makeJar(), '/api/login', 'POST', { email: `nt${rand}@x.com`, password: 'pass123' }, false)).status !== 403)
+  throw new Error('disabled teacher login should be 403');
+ok('root disabled a teacher: session revoked and login blocked');
+
+// Re-enable -> can log in again.
+await call(root, '/api/teachers/' + normalId, 'PATCH', { disabled: false });
+if ((await call(makeJar(), '/api/login', 'POST', { email: `nt${rand}@x.com`, password: 'pass123' }, false)).status !== 200)
+  throw new Error('re-enabled teacher should log in');
+ok('re-enabled teacher can log in again');
 
 console.log('\n✅ TEACHERS-TEST: ALL CHECKS PASSED\n');

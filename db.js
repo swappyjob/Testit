@@ -76,6 +76,7 @@ async function init() {
       password_hash TEXT NOT NULL,
       disabled      INTEGER NOT NULL DEFAULT 0,
       is_root       INTEGER NOT NULL DEFAULT 0,
+      access_until  TEXT NOT NULL DEFAULT '',   -- student access end date (YYYY-MM-DD); '' = no expiry
       created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
@@ -87,6 +88,7 @@ async function init() {
       phone       TEXT NOT NULL DEFAULT '',
       invite_role TEXT NOT NULL DEFAULT 'student',
       is_root     INTEGER NOT NULL DEFAULT 0,
+      access_until TEXT NOT NULL DEFAULT '',
       teacher_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       used        INTEGER NOT NULL DEFAULT 0,
       student_id  INTEGER REFERENCES users(id) ON DELETE SET NULL,
@@ -167,6 +169,8 @@ async function init() {
 
   // Forward-compatible column additions for databases created earlier.
   await pool.query('ALTER TABLE tests ADD COLUMN IF NOT EXISTS duration_minutes INTEGER NOT NULL DEFAULT 0');
+  await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS access_until TEXT NOT NULL DEFAULT ''");
+  await pool.query("ALTER TABLE signup_tokens ADD COLUMN IF NOT EXISTS access_until TEXT NOT NULL DEFAULT ''");
 }
 
 export { pool, all, get, run, tx, init };

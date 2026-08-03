@@ -36,6 +36,20 @@ function verifyPassword(password, stored) {
 }
 const randomToken = () => crypto.randomBytes(24).toString('hex');
 
+// A student's access end date. The whole end-date day is still valid; access
+// expires once that day has fully passed.
+function isExpired(accessUntil) {
+  if (!accessUntil) return false;
+  const t = new Date(accessUntil + 'T23:59:59').getTime();
+  return Number.isFinite(t) && t < Date.now();
+}
+// Keep only a valid YYYY-MM-DD date string, else ''.
+function readAccessUntil(body) {
+  const d = (body.accessUntil || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return '';
+  return Number.isFinite(new Date(d).getTime()) ? d : '';
+}
+
 // --- Password-reset helpers --------------------------------------------------
 // Email is optional: if SMTP isn't configured, we log the link to the console
 // so resets still work in local/dev setups (and admin-generated links always work).
@@ -97,7 +111,8 @@ app.use(h(async (req, res, next) => {
       `SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ? AND u.disabled = 0`,
       [sid]
     );
-    if (row) req.user = row;
+    // Students past their access end date are treated as logged out.
+    if (row && !(row.role === 'student' && isExpired(row.access_until))) req.user = row;
   }
   next();
 }));
@@ -161,6 +176,8 @@ app.post('/api/login', h(async (req, res) => {
     return res.status(401).json({ error: 'Incorrect email or password.' });
   if (user.disabled)
     return res.status(403).json({ error: 'Your account has been disabled. Please contact your teacher.' });
+  if (user.role === 'student' && isExpired(user.access_until))
+    return res.status(403).json({ error: 'Your access period has ended. Please contact your teacher.' });
   await startSession(res, user.id);
   res.json({ user: publicUser(user) });
 }));
@@ -245,6 +262,7 @@ app.post('/api/students', requireAuth('teacher'), h(async (req, res) => {
   const name = (req.body.name || '').trim();
   const email = (req.body.email || '').trim().toLowerCase();
   const phone = (req.body.phone || '').trim();
+  const accessUntil = readAccessUntil(req.body);
   if (!name || !email) return res.status(400).json({ error: 'Student name and email are required.' });
   if (!phone) return res.status(400).json({ error: 'Student phone number is required.' });
   if (!/^[\d+()\-\s]{6,20}$/.test(phone))
@@ -256,8 +274,8 @@ app.post('/api/students', requireAuth('teacher'), h(async (req, res) => {
 
   const token = randomToken();
   await run(
-    'INSERT INTO signup_tokens (token, name, email, phone, teacher_id) VALUES (?, ?, ?, ?, ?)',
-    [token, name, email, phone, req.user.id]
+    'INSERT INTO signup_tokens (token, name, email, phone, access_until, teacher_id) VALUES (?, ?, ?, ?, ?, ?)',
+    [token, name, email, phone, accessUntil, req.user.id]
   );
   res.json({ token, signupPath: `/signup.html?token=${token}` });
 }));
@@ -266,7 +284,7 @@ app.post('/api/students', requireAuth('teacher'), h(async (req, res) => {
 app.get('/api/students', requireAuth('teacher'), h(async (req, res) => {
   const q = (req.query.q || '').trim();
   const base =
-    `SELECT t.name, t.email, t.phone, t.token, t.used, t.student_id, u.disabled
+    `SELECT t.name, t.email, t.phone, t.access_until, t.token, t.used, t.student_id, u.disabled
        FROM signup_tokens t
        LEFT JOIN users u ON u.id = t.student_id
       WHERE t.teacher_id = ? AND t.invite_role = 'student'`;
@@ -285,6 +303,8 @@ app.get('/api/students', requireAuth('teacher'), h(async (req, res) => {
     name: i.name,
     email: i.email,
     phone: i.phone,
+    accessUntil: i.access_until,
+    expired: !!i.access_until && isExpired(i.access_until),
     signedUp: !!i.used,
     studentId: i.student_id,
     disabled: !!i.disabled,
@@ -296,7 +316,7 @@ app.get('/api/students', requireAuth('teacher'), h(async (req, res) => {
 // Download all of this teacher's students as a CSV file.
 app.get('/api/students/export.csv', requireAuth('teacher'), h(async (req, res) => {
   const rows = await all(
-    `SELECT t.name, t.email, t.phone, t.used, u.disabled,
+    `SELECT t.name, t.email, t.phone, t.access_until, t.used, u.disabled,
             to_char(t.created_at, 'YYYY-MM-DD HH24:MI') AS created_at
        FROM signup_tokens t
        LEFT JOIN users u ON u.id = t.student_id
@@ -308,12 +328,12 @@ app.get('/api/students/export.csv', requireAuth('teacher'), h(async (req, res) =
     const s = v == null ? '' : String(v);
     return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
   };
-  const header = ['Name', 'Email', 'Mobile Number', 'Signup Status', 'Account Status', 'Added On'];
+  const header = ['Name', 'Email', 'Mobile Number', 'Access Until', 'Signup Status', 'Account Status', 'Added On'];
   const lines = [header.join(',')];
   for (const r of rows) {
     const signup = r.used ? 'Signed up' : 'Invite pending';
-    const account = !r.used ? '' : (r.disabled ? 'Disabled' : 'Active');
-    lines.push([r.name, r.email, r.phone, signup, account, r.created_at].map(esc).join(','));
+    const account = !r.used ? '' : (r.disabled ? 'Disabled' : (isExpired(r.access_until) ? 'Expired' : 'Active'));
+    lines.push([r.name, r.email, r.phone, r.access_until, signup, account, r.created_at].map(esc).join(','));
   }
   const csv = '﻿' + lines.join('\r\n');
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
@@ -370,25 +390,43 @@ app.post('/api/teachers', requireRoot, h(async (req, res) => {
   res.json({ token, signupPath: `/signup.html?token=${token}` });
 }));
 
-// List all teachers plus pending teacher invites (root view).
-app.get('/api/teachers', requireRoot, h(async (req, res) => {
+// List all teachers. Any teacher can view the roster; pending invites (and
+// their signup links) are only included for root teachers.
+app.get('/api/teachers', requireAuth('teacher'), h(async (req, res) => {
+  const isRoot = !!req.user.is_root;
   const signedUp = await all(
     "SELECT id, name, email, phone, is_root, disabled FROM users WHERE role = 'teacher' ORDER BY id"
   );
-  const pending = await all(
-    "SELECT name, email, phone, is_root, token FROM signup_tokens WHERE invite_role = 'teacher' AND used = 0 ORDER BY created_at DESC"
-  );
-  const teachers = [
-    ...signedUp.map((u) => ({
-      id: u.id, name: u.name, email: u.email, phone: u.phone, isRoot: !!u.is_root, disabled: !!u.disabled,
-      signedUp: true, isSelf: u.id === req.user.id, signupPath: null,
-    })),
-    ...pending.map((p) => ({
-      id: null, name: p.name, email: p.email, phone: p.phone, isRoot: !!p.is_root, disabled: false,
-      signedUp: false, isSelf: false, signupPath: `/signup.html?token=${p.token}`,
-    })),
-  ];
-  res.json({ teachers });
+  const teachers = signedUp.map((u) => ({
+    id: u.id, name: u.name, email: u.email, phone: u.phone, isRoot: !!u.is_root, disabled: !!u.disabled,
+    signedUp: true, isSelf: u.id === req.user.id, signupPath: null,
+  }));
+  if (isRoot) {
+    const pending = await all(
+      "SELECT name, email, phone, is_root, token FROM signup_tokens WHERE invite_role = 'teacher' AND used = 0 ORDER BY created_at DESC"
+    );
+    for (const p of pending) {
+      teachers.push({
+        id: null, name: p.name, email: p.email, phone: p.phone, isRoot: !!p.is_root, disabled: false,
+        signedUp: false, isSelf: false, signupPath: `/signup.html?token=${p.token}`,
+      });
+    }
+  }
+  res.json({ teachers, canManage: isRoot });
+}));
+
+// Root enables/disables another teacher. A disabled teacher cannot log in and
+// is logged out immediately. A root cannot disable their own account.
+app.patch('/api/teachers/:id', requireRoot, h(async (req, res) => {
+  const teacherId = Number(req.params.id);
+  if (teacherId === req.user.id)
+    return res.status(400).json({ error: "You can't disable your own account." });
+  const t = await get("SELECT id FROM users WHERE id = ? AND role = 'teacher'", [teacherId]);
+  if (!t) return res.status(404).json({ error: 'Teacher not found.' });
+  const disabled = req.body.disabled ? 1 : 0;
+  await run('UPDATE users SET disabled = ? WHERE id = ?', [disabled, teacherId]);
+  if (disabled) await run('DELETE FROM sessions WHERE user_id = ?', [teacherId]);
+  res.json({ ok: true, disabled: !!disabled });
 }));
 
 // Root generates a password-reset link for any teacher.
@@ -421,8 +459,8 @@ app.post('/api/signup/:token', h(async (req, res) => {
   const role = t.invite_role === 'teacher' ? 'teacher' : 'student';
   const isRoot = role === 'teacher' && t.is_root ? 1 : 0;
   const newId = (await run(
-    'INSERT INTO users (role, name, email, phone, password_hash, is_root) VALUES (?, ?, ?, ?, ?, ?) RETURNING id',
-    [role, t.name, t.email, t.phone, hashPassword(password), isRoot]
+    'INSERT INTO users (role, name, email, phone, password_hash, is_root, access_until) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id',
+    [role, t.name, t.email, t.phone, hashPassword(password), isRoot, t.access_until || '']
   )).rows[0].id;
   await run('UPDATE signup_tokens SET used = 1, student_id = ? WHERE id = ?', [newId, t.id]);
   await startSession(res, newId);

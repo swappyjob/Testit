@@ -42,7 +42,7 @@ ok('CSV served with attachment headers');
 const text = await res.text();
 const body = text.replace(/^﻿/, '');
 const lines = body.trim().split('\r\n');
-if (lines[0] !== 'Name,Email,Mobile Number,Signup Status,Account Status,Added On') throw new Error('bad header: ' + lines[0]);
+if (lines[0] !== 'Name,Email,Mobile Number,Access Until,Signup Status,Account Status,Added On') throw new Error('bad header: ' + lines[0]);
 ok('header row correct');
 
 if (lines.length !== 3) throw new Error('expected 3 lines (header + 2), got ' + lines.length);
@@ -53,7 +53,7 @@ if (!body.includes('"Doe, John"')) throw new Error('comma in name not quoted');
 ok('field with a comma is quoted correctly');
 
 // Signed-up student shows Active; pending shows Invite pending
-if (!body.includes('Asha,asha' + rand + '@x.com,9000022222,Signed up,Active')) throw new Error('signed-up row wrong');
+if (!body.includes('Asha,asha' + rand + '@x.com,9000022222,,Signed up,Active')) throw new Error('signed-up row wrong');
 if (!/Doe, John.*Invite pending/.test(body)) throw new Error('pending row wrong');
 ok('signup and account status columns correct');
 

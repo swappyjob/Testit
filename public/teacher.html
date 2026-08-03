@@ -115,7 +115,9 @@
           <div><label>Student name</label><input type="text" id="s-name"></div>
           <div><label>Student email</label><input type="email" id="s-email"></div>
           <div><label>Phone number</label><input type="tel" id="s-phone" placeholder="e.g. +91 98765 43210"></div>
+          <div><label>Access until (optional)</label><input type="date" id="s-access"></div>
         </div>
+        <p class="muted" style="font-size:13px;margin:0">After this date the student is automatically disabled and can no longer log in. Leave blank for no end date.</p>
         <div style="margin-top:16px"><button class="btn" onclick="addStudent()">Create student & get link</button></div>
       </div>
       <div class="card">
@@ -128,9 +130,9 @@
       </div>
     </section>
 
-    <!-- ======================= TEACHERS (root only) ======================= -->
+    <!-- ======================= TEACHERS ======================= -->
     <section id="tab-teachers" class="hidden">
-      <div class="card">
+      <div class="card" id="add-teacher-card">
         <h1>Add a teacher</h1>
         <p class="muted">Invite another teacher and choose their role. Root teachers can add more teachers; normal teachers cannot.</p>
         <div id="teacher-msg" class="msg hidden"></div>
@@ -162,10 +164,10 @@
       ME = await requireRole('teacher', '/teacher-login.html');
       if (!ME) return;
       document.getElementById('who').textContent = ME.name + ' · ' + (ME.isRoot ? 'Root teacher' : 'Teacher');
-      if (ME.isRoot) {
-        document.getElementById('teachers-tab-btn').classList.remove('hidden');
-        loadTeachers();
-      }
+      // Every teacher can view the Teachers roster; only root can add/manage.
+      document.getElementById('teachers-tab-btn').classList.remove('hidden');
+      if (!ME.isRoot) document.getElementById('add-teacher-card').classList.add('hidden');
+      loadTeachers();
       loadTests();
       loadStudents();
       addQuestion('mcq');
@@ -589,11 +591,13 @@
       const name = document.getElementById('s-name').value.trim();
       const email = document.getElementById('s-email').value.trim();
       const phone = document.getElementById('s-phone').value.trim();
+      const accessUntil = document.getElementById('s-access').value;
       try {
-        await api('/api/students', 'POST', { name, email, phone });
+        await api('/api/students', 'POST', { name, email, phone, accessUntil });
         document.getElementById('s-name').value = '';
         document.getElementById('s-email').value = '';
         document.getElementById('s-phone').value = '';
+        document.getElementById('s-access').value = '';
         document.getElementById('s-search').value = '';
         showMsg('student-msg', 'Student created! Use the "Copy link" button in the table to share their signup link.', 'ok');
         loadStudents();
@@ -617,15 +621,19 @@
       }
       box.innerHTML = '';
       const table = el(`<table>
-        <thead><tr><th>Name</th><th>Email</th><th>Mobile number</th><th>Signup link</th><th>Status</th></tr></thead>
+        <thead><tr><th>Name</th><th>Email</th><th>Mobile number</th><th>Access until</th><th>Signup link</th><th>Status</th></tr></thead>
         <tbody></tbody>
       </table>`);
       const tb = table.querySelector('tbody');
       students.forEach((s) => {
+        const accessCell = s.accessUntil
+          ? (s.expired ? `<span style="color:var(--red)">${escapeHtml(s.accessUntil)}</span>` : escapeHtml(s.accessUntil))
+          : '<span class="muted">—</span>';
         const tr = el(`<tr>
           <td>${escapeHtml(s.name)}</td>
           <td>${escapeHtml(s.email)}</td>
           <td>${s.phone ? escapeHtml(s.phone) : '<span class="muted">—</span>'}</td>
+          <td>${accessCell}</td>
           <td class="link-cell"></td>
           <td class="status-cell"></td>
         </tr>`);
@@ -645,7 +653,7 @@
           linkCell.innerHTML = '<span class="muted">—</span>';
           statusCell.innerHTML = s.disabled
             ? '<span class="pill gray">disabled</span>'
-            : '<span class="pill green">active</span>';
+            : (s.expired ? '<span class="pill gray">expired</span>' : '<span class="pill green">active</span>');
           const toggle = el(`<button class="btn ${s.disabled ? 'secondary' : 'danger'} small" style="margin-left:8px">${s.disabled ? 'Enable' : 'Disable'}</button>`);
           toggle.onclick = () => toggleStudent(s.studentId, !s.disabled);
           statusCell.append(toggle);
@@ -676,12 +684,12 @@
     }
 
     async function loadTeachers() {
-      const { teachers } = await api('/api/teachers');
+      const { teachers, canManage } = await api('/api/teachers');
       const box = document.getElementById('teachers-list');
       if (teachers.length === 0) { box.innerHTML = '<p class="muted">No teachers yet.</p>'; return; }
       box.innerHTML = '';
       const table = el(`<table>
-        <thead><tr><th>Name</th><th>Email</th><th>Mobile number</th><th>Role</th><th>Signup link</th></tr></thead>
+        <thead><tr><th>Name</th><th>Email</th><th>Mobile number</th><th>Role</th><th>Status</th></tr></thead>
         <tbody></tbody>
       </table>`);
       const tb = table.querySelector('tbody');
@@ -691,29 +699,44 @@
           <td>${escapeHtml(t.email)}</td>
           <td>${t.phone ? escapeHtml(t.phone) : '<span class="muted">—</span>'}</td>
           <td>${t.isRoot ? '<span class="pill brand">Root teacher</span>' : '<span class="pill gray">Teacher</span>'}</td>
-          <td class="link-cell"></td>
+          <td class="status-cell"></td>
         </tr>`);
-        const linkCell = tr.querySelector('.link-cell');
-        if (t.signedUp) {
-          linkCell.innerHTML = '<span class="pill green">signed up</span> ';
-          if (t.id && !t.isSelf) {
-            const rb = el('<button class="btn secondary small" style="margin-left:6px">Reset link</button>');
-            rb.onclick = () => copyResetLink('/api/teachers/' + t.id + '/reset-link', rb);
-            linkCell.append(rb);
-          }
-        } else {
+        const cell = tr.querySelector('.status-cell');
+        if (!t.signedUp) {
+          // Pending invite (root viewers only) — offer the signup link.
+          cell.innerHTML = '<span class="pill amber">invite pending</span> ';
           const link = location.origin + t.signupPath;
-          const btn = el('<button class="btn secondary small">Copy link</button>');
+          const btn = el('<button class="btn secondary small" style="margin-left:6px">Copy link</button>');
           btn.onclick = () => {
             navigator.clipboard.writeText(link);
             btn.textContent = 'Copied!';
             setTimeout(() => { btn.textContent = 'Copy link'; }, 1500);
           };
-          linkCell.append(btn);
+          cell.append(btn);
+        } else {
+          cell.innerHTML = t.disabled
+            ? '<span class="pill gray">disabled</span>'
+            : '<span class="pill green">active</span>';
+          if (canManage && !t.isSelf) {
+            const toggle = el(`<button class="btn ${t.disabled ? 'secondary' : 'danger'} small" style="margin-left:8px">${t.disabled ? 'Enable' : 'Disable'}</button>`);
+            toggle.onclick = () => toggleTeacher(t.id, !t.disabled, t.name);
+            cell.append(toggle);
+            const rb = el('<button class="btn secondary small" style="margin-left:8px">Reset link</button>');
+            rb.onclick = () => copyResetLink('/api/teachers/' + t.id + '/reset-link', rb);
+            cell.append(rb);
+          }
         }
         tb.append(tr);
       });
       box.append(table);
+    }
+
+    async function toggleTeacher(teacherId, disable, name) {
+      if (disable && !confirm(`Disable ${name}? They will be logged out immediately and cannot log in until you re-enable them.`)) return;
+      try {
+        await api('/api/teachers/' + teacherId, 'PATCH', { disabled: disable });
+        loadTeachers();
+      } catch (err) { showMsg('teacher-msg', err.message); }
     }
 
     // Generate a password-reset link for a user and copy it to the clipboard.
