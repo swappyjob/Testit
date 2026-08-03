@@ -67,9 +67,15 @@ async function tx(fn) {
 // Create the schema if it does not exist. Safe to call on every startup.
 async function init() {
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS organizations (
+      id         SERIAL PRIMARY KEY,
+      name       TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
     CREATE TABLE IF NOT EXISTS users (
       id            SERIAL PRIMARY KEY,
-      role          TEXT NOT NULL CHECK (role IN ('teacher', 'student')),
+      role          TEXT NOT NULL CHECK (role IN ('admin', 'teacher', 'student')),
       name          TEXT NOT NULL,
       email         TEXT NOT NULL UNIQUE,
       phone         TEXT NOT NULL DEFAULT '',
@@ -77,6 +83,7 @@ async function init() {
       disabled      INTEGER NOT NULL DEFAULT 0,
       is_root       INTEGER NOT NULL DEFAULT 0,
       access_until  TEXT NOT NULL DEFAULT '',   -- student access end date (YYYY-MM-DD); '' = no expiry
+      org_id        INTEGER REFERENCES organizations(id) ON DELETE SET NULL,  -- NULL for the platform admin
       created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
@@ -89,6 +96,7 @@ async function init() {
       invite_role TEXT NOT NULL DEFAULT 'student',
       is_root     INTEGER NOT NULL DEFAULT 0,
       access_until TEXT NOT NULL DEFAULT '',
+      org_id      INTEGER REFERENCES organizations(id) ON DELETE SET NULL,
       teacher_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       used        INTEGER NOT NULL DEFAULT 0,
       student_id  INTEGER REFERENCES users(id) ON DELETE SET NULL,
@@ -171,6 +179,11 @@ async function init() {
   await pool.query('ALTER TABLE tests ADD COLUMN IF NOT EXISTS duration_minutes INTEGER NOT NULL DEFAULT 0');
   await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS access_until TEXT NOT NULL DEFAULT ''");
   await pool.query("ALTER TABLE signup_tokens ADD COLUMN IF NOT EXISTS access_until TEXT NOT NULL DEFAULT ''");
+  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS org_id INTEGER REFERENCES organizations(id) ON DELETE SET NULL');
+  await pool.query('ALTER TABLE signup_tokens ADD COLUMN IF NOT EXISTS org_id INTEGER REFERENCES organizations(id) ON DELETE SET NULL');
+  // Allow the new 'admin' role on databases created before it existed.
+  await pool.query('ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check');
+  await pool.query("ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('admin', 'teacher', 'student'))");
 }
 
 export { pool, all, get, run, tx, init };

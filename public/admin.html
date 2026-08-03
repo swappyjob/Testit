@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin Dashboard</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <div class="topbar">
+    <a class="brand" href="/admin.html">📝 Test<span>Platform</span></a>
+    <div class="row">
+      <span class="user" id="who"></span>
+      <button class="btn ghost small" onclick="logout()">Log out</button>
+    </div>
+  </div>
+
+  <div class="container">
+    <div class="card">
+      <h1>Organizations</h1>
+      <p class="muted">Create organizations, then add a root teacher to each. Root teachers manage their own teachers and students.</p>
+      <div id="org-msg" class="msg hidden"></div>
+      <div class="row" style="align-items:flex-end">
+        <div style="flex:1"><label>New organization name</label><input type="text" id="org-name" placeholder="e.g. Springfield High"></div>
+        <button class="btn" onclick="createOrg()">Create organization</button>
+      </div>
+    </div>
+
+    <div id="orgs"></div>
+  </div>
+
+  <script src="/js/app.js"></script>
+  <script>
+    let ME = null;
+    (async () => {
+      const u = await currentUser();
+      if (!u) { location.href = '/admin-login.html'; return; }
+      if (u.role !== 'admin') { location.href = u.role === 'teacher' ? '/teacher.html' : '/student.html'; return; }
+      ME = u;
+      document.getElementById('who').textContent = u.name + ' · Admin';
+      loadOrgs();
+    })();
+
+    async function createOrg() {
+      const name = document.getElementById('org-name').value.trim();
+      if (!name) { showMsg('org-msg', 'Enter an organization name.'); return; }
+      try {
+        await api('/api/orgs', 'POST', { name });
+        document.getElementById('org-name').value = '';
+        showMsg('org-msg', 'Organization created.', 'ok');
+        loadOrgs();
+      } catch (err) { showMsg('org-msg', err.message); }
+    }
+
+    async function loadOrgs() {
+      const { orgs } = await api('/api/orgs');
+      const box = document.getElementById('orgs');
+      if (orgs.length === 0) { box.innerHTML = '<div class="card"><p class="muted">No organizations yet. Create one above.</p></div>'; return; }
+      box.innerHTML = '';
+      orgs.forEach((o) => box.append(renderOrg(o)));
+    }
+
+    function renderOrg(o) {
+      const card = el(`<div class="card">
+        <div class="row" style="justify-content:space-between; align-items:center">
+          <h2 style="margin:0">${escapeHtml(o.name)}</h2>
+          <span class="muted">${o.teacherCount} teacher(s) · ${o.studentCount} student(s)</span>
+        </div>
+        <div class="org-msg msg hidden"></div>
+        <h3 style="margin-top:14px">Teachers</h3>
+        <div class="teachers"></div>
+        <h3 style="margin-top:16px">Add root teacher</h3>
+        <div class="grid two">
+          <div><label>Name</label><input type="text" class="rt-name"></div>
+          <div><label>Email</label><input type="email" class="rt-email"></div>
+          <div><label>Phone number</label><input type="tel" class="rt-phone" placeholder="e.g. +91 98765 43210"></div>
+        </div>
+        <div style="margin-top:12px"><button class="btn secondary">Create root teacher & get link</button></div>
+      </div>`);
+
+      const tbox = card.querySelector('.teachers');
+      if (o.teachers.length === 0) {
+        tbox.innerHTML = '<p class="muted">No teachers yet.</p>';
+      } else {
+        const table = el('<table><thead><tr><th>Name</th><th>Email</th><th>Mobile</th><th>Role</th><th>Status</th></tr></thead><tbody></tbody></table>');
+        const tb = table.querySelector('tbody');
+        o.teachers.forEach((t) => {
+          const tr = el(`<tr>
+            <td>${escapeHtml(t.name)}</td>
+            <td>${escapeHtml(t.email)}</td>
+            <td>${t.phone ? escapeHtml(t.phone) : '<span class="muted">—</span>'}</td>
+            <td>${t.isRoot ? '<span class="pill brand">Root</span>' : '<span class="pill gray">Teacher</span>'}</td>
+            <td class="st"></td>
+          </tr>`);
+          const st = tr.querySelector('.st');
+          if (t.signedUp) {
+            st.innerHTML = t.disabled ? '<span class="pill gray">disabled</span>' : '<span class="pill green">signed up</span>';
+          } else {
+            const link = location.origin + t.signupPath;
+            const b = el('<button class="btn secondary small">Copy link</button>');
+            b.onclick = () => { navigator.clipboard.writeText(link); b.textContent = 'Copied!'; setTimeout(() => b.textContent = 'Copy link', 1500); };
+            st.innerHTML = '<span class="pill amber">invite pending</span> ';
+            st.append(b);
+          }
+          tb.append(tr);
+        });
+        tbox.append(table);
+      }
+
+      const msg = card.querySelector('.org-msg');
+      card.querySelector('button.btn.secondary').onclick = async () => {
+        const name = card.querySelector('.rt-name').value.trim();
+        const email = card.querySelector('.rt-email').value.trim();
+        const phone = card.querySelector('.rt-phone').value.trim();
+        try {
+          await api('/api/admin/root-teachers', 'POST', { orgId: o.id, name, email, phone });
+          showMsg(msg, 'Root teacher created. Copy their signup link from the table above.', 'ok');
+          loadOrgs();
+        } catch (err) { showMsg(msg, err.message); }
+      };
+      return card;
+    }
+  </script>
+</body>
+</html>

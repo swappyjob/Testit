@@ -41,6 +41,29 @@
     </div>
   </div>
 
+  <!-- Edit student modal -->
+  <div id="student-modal" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="row" style="justify-content:space-between; align-items:center">
+        <h2 style="margin:0">Edit student</h2>
+        <button class="btn ghost small" onclick="closeStudentModal()">✕</button>
+      </div>
+      <div id="es-msg" class="msg hidden"></div>
+      <label>Name</label>
+      <input type="text" id="es-name">
+      <label>Email (cannot be changed)</label>
+      <input type="email" id="es-email" disabled>
+      <label>Phone number</label>
+      <input type="tel" id="es-phone">
+      <label>Access until (optional)</label>
+      <input type="date" id="es-access">
+      <div class="row" style="margin-top:18px">
+        <button class="btn" onclick="saveStudentEdit()">Save changes</button>
+        <button class="btn ghost" onclick="closeStudentModal()">Cancel</button>
+      </div>
+    </div>
+  </div>
+
   <div class="container">
     <div class="tabs">
       <button class="tab active" data-tab="tests" onclick="showTab('tests')">My Tests</button>
@@ -604,6 +627,35 @@
       } catch (err) { showMsg('student-msg', err.message); }
     }
 
+    // ---- Edit student (email is not editable) ----
+    let editingStudentId = null;
+    function openStudentEdit(s) {
+      editingStudentId = s.id;
+      document.getElementById('es-name').value = s.name;
+      document.getElementById('es-email').value = s.email;
+      document.getElementById('es-phone').value = s.phone || '';
+      document.getElementById('es-access').value = s.accessUntil || '';
+      document.getElementById('es-msg').classList.add('hidden');
+      document.getElementById('student-modal').classList.remove('hidden');
+    }
+    function closeStudentModal() {
+      document.getElementById('student-modal').classList.add('hidden');
+    }
+    async function saveStudentEdit() {
+      try {
+        await api('/api/students/' + editingStudentId, 'PUT', {
+          name: document.getElementById('es-name').value.trim(),
+          phone: document.getElementById('es-phone').value.trim(),
+          accessUntil: document.getElementById('es-access').value,
+        });
+        closeStudentModal();
+        loadStudents(document.getElementById('s-search').value.trim());
+      } catch (err) { showMsg('es-msg', err.message); }
+    }
+    document.getElementById('student-modal').addEventListener('click', (e) => {
+      if (e.target.id === 'student-modal') closeStudentModal();
+    });
+
     let searchTimer = null;
     function onStudentSearch() {
       clearTimeout(searchTimer);
@@ -661,6 +713,9 @@
           resetBtn.onclick = () => copyResetLink('/api/students/' + s.studentId + '/reset-link', resetBtn);
           statusCell.append(resetBtn);
         }
+        const editBtn = el('<button class="btn ghost small" style="margin-left:8px">Edit</button>');
+        editBtn.onclick = () => openStudentEdit(s);
+        statusCell.append(editBtn);
         tb.append(tr);
       });
       box.append(table);

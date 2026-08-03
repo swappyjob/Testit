@@ -134,13 +134,20 @@ function requireRoot(req, res, next) {
   next();
 }
 
+// The platform-level root admin.
+function requireAdmin(req, res, next) {
+  if (!req.user) return res.status(401).json({ error: 'Please log in.' });
+  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Only the root admin can do that.' });
+  next();
+}
+
 async function startSession(res, userId) {
   const token = randomToken();
   await run('INSERT INTO sessions (token, user_id) VALUES (?, ?)', [token, userId]);
   res.cookie('sid', token, { httpOnly: true, sameSite: 'lax', maxAge: 1000 * 60 * 60 * 24 * 7 });
 }
 
-const publicUser = (u) => ({ id: u.id, role: u.role, name: u.name, email: u.email, isRoot: !!u.is_root });
+const publicUser = (u) => ({ id: u.id, role: u.role, name: u.name, email: u.email, isRoot: !!u.is_root, orgId: u.org_id });
 
 // ============================================================================
 // AUTH
@@ -156,16 +163,18 @@ app.post('/api/register-teacher', h(async (req, res) => {
   if (await get('SELECT id FROM users WHERE email = ?', [email]))
     return res.status(409).json({ error: 'An account with that email already exists.' });
 
-  // Bootstrap: while no root teacher exists yet, the next teacher to register
-  // becomes the root teacher (who can then invite others).
-  const rootExists = await get("SELECT 1 FROM users WHERE role = 'teacher' AND is_root = 1 LIMIT 1");
-  const isRoot = rootExists ? 0 : 1;
-  const newId = (await run(
-    'INSERT INTO users (role, name, email, password_hash, is_root) VALUES (?, ?, ?, ?, ?) RETURNING id',
-    ['teacher', name, email, hashPassword(password), isRoot]
-  )).rows[0].id;
+  // Bootstrap/dev entry point (not exposed in the UI): create a fresh
+  // organization and make this teacher its root teacher.
+  const { newId, orgId } = await tx(async (t) => {
+    const oid = (await t.run('INSERT INTO organizations (name) VALUES (?) RETURNING id', [`${name}'s Organization`])).rows[0].id;
+    const uid = (await t.run(
+      'INSERT INTO users (role, name, email, password_hash, is_root, org_id) VALUES (?, ?, ?, ?, 1, ?) RETURNING id',
+      ['teacher', name, email, hashPassword(password), oid]
+    )).rows[0].id;
+    return { newId: uid, orgId: oid };
+  });
   await startSession(res, newId);
-  res.json({ user: { id: newId, role: 'teacher', name, email, isRoot: !!isRoot } });
+  res.json({ user: { id: newId, role: 'teacher', name, email, isRoot: true, orgId } });
 }));
 
 app.post('/api/login', h(async (req, res) => {
@@ -274,8 +283,8 @@ app.post('/api/students', requireAuth('teacher'), h(async (req, res) => {
 
   const token = randomToken();
   await run(
-    'INSERT INTO signup_tokens (token, name, email, phone, access_until, teacher_id) VALUES (?, ?, ?, ?, ?, ?)',
-    [token, name, email, phone, accessUntil, req.user.id]
+    'INSERT INTO signup_tokens (token, name, email, phone, access_until, org_id, teacher_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    [token, name, email, phone, accessUntil, req.user.org_id, req.user.id]
   );
   res.json({ token, signupPath: `/signup.html?token=${token}` });
 }));
@@ -284,7 +293,7 @@ app.post('/api/students', requireAuth('teacher'), h(async (req, res) => {
 app.get('/api/students', requireAuth('teacher'), h(async (req, res) => {
   const q = (req.query.q || '').trim();
   const base =
-    `SELECT t.name, t.email, t.phone, t.access_until, t.token, t.used, t.student_id, u.disabled
+    `SELECT t.id AS token_id, t.name, t.email, t.phone, t.access_until, t.token, t.used, t.student_id, u.disabled
        FROM signup_tokens t
        LEFT JOIN users u ON u.id = t.student_id
       WHERE t.teacher_id = ? AND t.invite_role = 'student'`;
@@ -300,6 +309,7 @@ app.get('/api/students', requireAuth('teacher'), h(async (req, res) => {
     invites = await all(`${base} ORDER BY t.created_at DESC`, [req.user.id]);
   }
   const students = invites.map((i) => ({
+    id: i.token_id,
     name: i.name,
     email: i.email,
     phone: i.phone,
@@ -356,6 +366,31 @@ app.patch('/api/students/:id', requireAuth('teacher'), h(async (req, res) => {
   res.json({ ok: true, disabled: !!disabled });
 }));
 
+// Edit a student's details (name, phone, access end date). Email is immutable.
+// :id is the signup-invite id (works for pending and signed-up students).
+app.put('/api/students/:id', requireAuth('teacher'), h(async (req, res) => {
+  const tok = await get(
+    "SELECT * FROM signup_tokens WHERE id = ? AND teacher_id = ? AND invite_role = 'student'",
+    [Number(req.params.id), req.user.id]
+  );
+  if (!tok) return res.status(404).json({ error: 'Student not found.' });
+  const name = (req.body.name || '').trim();
+  const phone = (req.body.phone || '').trim();
+  const accessUntil = readAccessUntil(req.body);
+  if (!name) return res.status(400).json({ error: 'Student name is required.' });
+  if (!phone) return res.status(400).json({ error: 'Student phone number is required.' });
+  if (!/^[\d+()\-\s]{6,20}$/.test(phone))
+    return res.status(400).json({ error: 'Please enter a valid phone number.' });
+
+  await run('UPDATE signup_tokens SET name = ?, phone = ?, access_until = ? WHERE id = ?',
+    [name, phone, accessUntil, tok.id]);
+  if (tok.student_id) {
+    await run('UPDATE users SET name = ?, phone = ?, access_until = ? WHERE id = ?',
+      [name, phone, accessUntil, tok.student_id]);
+  }
+  res.json({ ok: true });
+}));
+
 // Teacher generates a password-reset link for one of their students.
 app.post('/api/students/:id/reset-link', requireAuth('teacher'), h(async (req, res) => {
   const studentId = Number(req.params.id);
@@ -384,18 +419,19 @@ app.post('/api/teachers', requireRoot, h(async (req, res) => {
 
   const token = randomToken();
   await run(
-    "INSERT INTO signup_tokens (token, name, email, phone, invite_role, is_root, teacher_id) VALUES (?, ?, ?, ?, 'teacher', ?, ?)",
-    [token, name, email, phone, makeRoot, req.user.id]
+    "INSERT INTO signup_tokens (token, name, email, phone, invite_role, is_root, org_id, teacher_id) VALUES (?, ?, ?, ?, 'teacher', ?, ?, ?)",
+    [token, name, email, phone, makeRoot, req.user.org_id, req.user.id]
   );
   res.json({ token, signupPath: `/signup.html?token=${token}` });
 }));
 
-// List all teachers. Any teacher can view the roster; pending invites (and
-// their signup links) are only included for root teachers.
+// List teachers IN THE VIEWER'S ORGANIZATION. Any teacher can view the roster;
+// pending invites (and their signup links) are only included for root teachers.
 app.get('/api/teachers', requireAuth('teacher'), h(async (req, res) => {
   const isRoot = !!req.user.is_root;
   const signedUp = await all(
-    "SELECT id, name, email, phone, is_root, disabled FROM users WHERE role = 'teacher' ORDER BY id"
+    "SELECT id, name, email, phone, is_root, disabled FROM users WHERE role = 'teacher' AND org_id = ? ORDER BY id",
+    [req.user.org_id]
   );
   const teachers = signedUp.map((u) => ({
     id: u.id, name: u.name, email: u.email, phone: u.phone, isRoot: !!u.is_root, disabled: !!u.disabled,
@@ -403,7 +439,8 @@ app.get('/api/teachers', requireAuth('teacher'), h(async (req, res) => {
   }));
   if (isRoot) {
     const pending = await all(
-      "SELECT name, email, phone, is_root, token FROM signup_tokens WHERE invite_role = 'teacher' AND used = 0 ORDER BY created_at DESC"
+      "SELECT name, email, phone, is_root, token FROM signup_tokens WHERE invite_role = 'teacher' AND used = 0 AND org_id = ? ORDER BY created_at DESC",
+      [req.user.org_id]
     );
     for (const p of pending) {
       teachers.push({
@@ -421,7 +458,7 @@ app.patch('/api/teachers/:id', requireRoot, h(async (req, res) => {
   const teacherId = Number(req.params.id);
   if (teacherId === req.user.id)
     return res.status(400).json({ error: "You can't disable your own account." });
-  const t = await get("SELECT id FROM users WHERE id = ? AND role = 'teacher'", [teacherId]);
+  const t = await get("SELECT id FROM users WHERE id = ? AND role = 'teacher' AND org_id = ?", [teacherId, req.user.org_id]);
   if (!t) return res.status(404).json({ error: 'Teacher not found.' });
   const disabled = req.body.disabled ? 1 : 0;
   await run('UPDATE users SET disabled = ? WHERE id = ?', [disabled, teacherId]);
@@ -429,13 +466,68 @@ app.patch('/api/teachers/:id', requireRoot, h(async (req, res) => {
   res.json({ ok: true, disabled: !!disabled });
 }));
 
-// Root generates a password-reset link for any teacher.
+// Root generates a password-reset link for a teacher in their organization.
 app.post('/api/teachers/:id/reset-link', requireRoot, h(async (req, res) => {
   const teacherId = Number(req.params.id);
-  const t = await get("SELECT id FROM users WHERE id = ? AND role = 'teacher'", [teacherId]);
+  const t = await get("SELECT id FROM users WHERE id = ? AND role = 'teacher' AND org_id = ?", [teacherId, req.user.org_id]);
   if (!t) return res.status(404).json({ error: 'Teacher not found.' });
   const token = await createResetToken(teacherId);
   res.json({ resetPath: `/reset.html?token=${token}` });
+}));
+
+// ============================================================================
+// ADMIN  (platform root admin: organizations + their root teachers)
+// ============================================================================
+app.post('/api/orgs', requireAdmin, h(async (req, res) => {
+  const name = (req.body.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'Organization name is required.' });
+  const id = (await run('INSERT INTO organizations (name) VALUES (?) RETURNING id', [name])).rows[0].id;
+  res.json({ id, name });
+}));
+
+// List all organizations with their teachers (signed up + pending) and counts.
+app.get('/api/orgs', requireAdmin, h(async (req, res) => {
+  const orgs = await all('SELECT id, name FROM organizations ORDER BY name');
+  const result = [];
+  for (const o of orgs) {
+    const signedUp = await all(
+      "SELECT name, email, phone, is_root, disabled FROM users WHERE role = 'teacher' AND org_id = ? ORDER BY id", [o.id]
+    );
+    const pending = await all(
+      "SELECT name, email, phone, is_root, token FROM signup_tokens WHERE invite_role = 'teacher' AND used = 0 AND org_id = ? ORDER BY created_at DESC", [o.id]
+    );
+    const studentCount = (await get("SELECT COUNT(*) AS c FROM users WHERE role = 'student' AND org_id = ?", [o.id])).c;
+    const teachers = [
+      ...signedUp.map((u) => ({ name: u.name, email: u.email, phone: u.phone, isRoot: !!u.is_root, disabled: !!u.disabled, signedUp: true, signupPath: null })),
+      ...pending.map((p) => ({ name: p.name, email: p.email, phone: p.phone, isRoot: !!p.is_root, disabled: false, signedUp: false, signupPath: `/signup.html?token=${p.token}` })),
+    ];
+    result.push({ id: o.id, name: o.name, teachers, teacherCount: signedUp.length, studentCount });
+  }
+  res.json({ orgs: result });
+}));
+
+// Admin creates a root teacher for an organization (returns a signup link).
+app.post('/api/admin/root-teachers', requireAdmin, h(async (req, res) => {
+  const orgId = Number(req.body.orgId);
+  const name = (req.body.name || '').trim();
+  const email = (req.body.email || '').trim().toLowerCase();
+  const phone = (req.body.phone || '').trim();
+  if (!(await get('SELECT id FROM organizations WHERE id = ?', [orgId])))
+    return res.status(404).json({ error: 'Organization not found.' });
+  if (!name || !email) return res.status(400).json({ error: 'Teacher name and email are required.' });
+  if (!phone) return res.status(400).json({ error: 'Teacher phone number is required.' });
+  if (!/^[\d+()\-\s]{6,20}$/.test(phone)) return res.status(400).json({ error: 'Please enter a valid phone number.' });
+  if (await get('SELECT id FROM users WHERE email = ?', [email]))
+    return res.status(409).json({ error: 'A user with that email already exists.' });
+  if (await get('SELECT id FROM signup_tokens WHERE email = ? AND used = 0', [email]))
+    return res.status(409).json({ error: 'A pending invite for that email already exists.' });
+
+  const token = randomToken();
+  await run(
+    "INSERT INTO signup_tokens (token, name, email, phone, invite_role, is_root, org_id, teacher_id) VALUES (?, ?, ?, ?, 'teacher', 1, ?, ?)",
+    [token, name, email, phone, orgId, req.user.id]
+  );
+  res.json({ token, signupPath: `/signup.html?token=${token}` });
 }));
 
 // Validate a signup token (used by the signup page to pre-fill name/email).
@@ -459,12 +551,12 @@ app.post('/api/signup/:token', h(async (req, res) => {
   const role = t.invite_role === 'teacher' ? 'teacher' : 'student';
   const isRoot = role === 'teacher' && t.is_root ? 1 : 0;
   const newId = (await run(
-    'INSERT INTO users (role, name, email, phone, password_hash, is_root, access_until) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id',
-    [role, t.name, t.email, t.phone, hashPassword(password), isRoot, t.access_until || '']
+    'INSERT INTO users (role, name, email, phone, password_hash, is_root, access_until, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
+    [role, t.name, t.email, t.phone, hashPassword(password), isRoot, t.access_until || '', t.org_id || null]
   )).rows[0].id;
   await run('UPDATE signup_tokens SET used = 1, student_id = ? WHERE id = ?', [newId, t.id]);
   await startSession(res, newId);
-  res.json({ user: { id: newId, role, name: t.name, email: t.email, isRoot: !!isRoot } });
+  res.json({ user: { id: newId, role, name: t.name, email: t.email, isRoot: !!isRoot, orgId: t.org_id || null } });
 }));
 
 // ============================================================================

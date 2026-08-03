@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Teacher Login</title>
+  <title>Admin Login</title>
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
@@ -13,21 +13,18 @@
 
   <div class="container narrow">
     <div class="card">
-      <h1>Teacher login</h1>
-      <p class="muted">Teachers are created by an administrator or a root teacher. Ask them for a signup link if you don't have an account yet.</p>
+      <h1>Admin login</h1>
+      <p class="muted">Platform administrator sign-in.</p>
       <div id="msg" class="msg hidden"></div>
       <form id="login-form">
         <label>Email</label>
-        <input type="email" id="l-email" required>
+        <input type="email" id="email" required>
         <label>Password</label>
-        <input type="password" id="l-password" required>
+        <input type="password" id="password" required>
         <div style="margin-top:18px"><button class="btn" type="submit">Log in</button></div>
       </form>
     </div>
-    <p class="center muted">
-      <a href="/forgot-password.html">Forgot password?</a><br>
-      Are you a student? <a href="/student-login.html">Student login</a>
-    </p>
+    <p class="center muted"><a href="/forgot-password.html">Forgot password?</a></p>
   </div>
 
   <script src="/js/app.js"></script>
@@ -37,13 +34,12 @@
       const u = await currentUser();
       if (u) location.href = dash(u.role);
     })();
-
     document.getElementById('login-form').addEventListener('submit', async (e) => {
       e.preventDefault();
       try {
         const { user } = await api('/api/login', 'POST', {
-          email: document.getElementById('l-email').value,
-          password: document.getElementById('l-password').value,
+          email: document.getElementById('email').value,
+          password: document.getElementById('password').value,
         });
         location.href = dash(user.role);
       } catch (err) { showMsg('msg', err.message); }

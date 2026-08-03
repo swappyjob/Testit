@@ -98,14 +98,16 @@ const oEmail = `ot${rand}@x.com`;
 await call(other, '/api/register-teacher', 'POST', { name: 'OT', email: oEmail, password: 'secret123' });
 if ((await call(other, '/api/students/' + su.id + '/reset-link', 'POST', undefined, false)).status !== 404)
   throw new Error('non-owning teacher should get 404');
-if ((await call(other, '/api/teachers/' + me.id + '/reset-link', 'POST', undefined, false)).status !== 403)
-  throw new Error('non-root should get 403 resetting a teacher');
-ok('reset-link permissions enforced (owner-only students, root-only teachers)');
+// "other" is a root teacher of a different org, so it cannot reset a teacher in this org.
+if ((await call(other, '/api/teachers/' + me.id + '/reset-link', 'POST', undefined, false)).status !== 404)
+  throw new Error('cross-org teacher reset should get 404');
+ok('reset-link permissions enforced (owner-only students, same-org teachers)');
 
-// Root can generate a reset link for a teacher.
-const otherRow = (await call(teacher, '/api/teachers')).data.teachers.find((t) => t.email === oEmail);
-if (!(await call(teacher, '/api/teachers/' + otherRow.id + '/reset-link', 'POST')).data.resetPath)
-  throw new Error('root should be able to reset a teacher');
-ok('root can generate a reset link for a teacher');
+// Root can generate a reset link for a teacher in their own org.
+const colleague = (await call(teacher, '/api/teachers', 'POST', { name: 'Colleague', email: `col${rand}@x.com`, phone: '9000000009', isRoot: false })).data;
+const colUser = (await call(makeJar(), '/api/signup/' + tokenOf(colleague.signupPath), 'POST', { password: 'pass123' })).data.user;
+if (!(await call(teacher, '/api/teachers/' + colUser.id + '/reset-link', 'POST')).data.resetPath)
+  throw new Error('root should be able to reset a same-org teacher');
+ok('root can generate a reset link for a teacher in their org');
 
 console.log('\n✅ RESET-TEST: ALL CHECKS PASSED\n');

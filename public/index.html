@@ -25,13 +25,14 @@
         <span class="btn secondary">Student login</span>
       </a>
     </div>
+    <p class="muted" style="margin-top:22px"><a href="/admin-login.html">Administrator login</a></p>
   </div>
 
   <script src="/js/app.js"></script>
   <script>
-    // If already logged in, jump straight to the dashboard.
+    // If already logged in, jump straight to the right dashboard.
     currentUser().then((u) => {
-      if (u) location.href = u.role === 'teacher' ? '/teacher.html' : '/student.html';
+      if (u) location.href = u.role === 'admin' ? '/admin.html' : (u.role === 'teacher' ? '/teacher.html' : '/student.html');
     });
   </script>
 </body>
