@@ -27,8 +27,15 @@
       <form id="test-form">
         <div id="questions"></div>
         <div class="card">
-          <button class="btn" type="submit">Submit test</button>
-          <span class="muted" style="margin-left:10px">You can only submit once.</span>
+          <div class="row" style="justify-content:space-between; align-items:center">
+            <button class="btn ghost" type="button" id="prev-btn">← Previous</button>
+            <span class="muted" id="progress"></span>
+            <button class="btn" type="button" id="next-btn">Next →</button>
+            <button class="btn hidden" type="submit" id="submit-btn">Submit test</button>
+          </div>
+          <p class="muted" style="margin:10px 0 0; font-size:13px">
+            Use Previous / Next to move between questions. Your answers are kept as you navigate. You can only submit once.
+          </p>
         </div>
       </form>
     </div>
@@ -79,7 +86,7 @@
     function renderQuestions(questions) {
       const box = document.getElementById('questions');
       questions.forEach((q, i) => {
-        const card = el(`<div class="q-card">
+        const card = el(`<div class="q-card q-page">
           <h3>Q${i + 1}. ${escapeHtml(q.prompt)} <span class="muted">(${q.points} pt)</span></h3>
         </div>`);
         if (q.image) card.append(el(`<img src="${q.image}" style="max-width:100%;max-height:260px;border:1px solid var(--line);border-radius:8px;display:block;margin-bottom:10px">`));
@@ -100,6 +107,27 @@
         }
         box.append(card);
       });
+      initNav();
+    }
+
+    // ---- One-question-per-page navigation (no page refresh) ----
+    let current = 0;
+    function initNav() {
+      document.getElementById('prev-btn').onclick = () => showQuestion(current - 1);
+      document.getElementById('next-btn').onclick = () => showQuestion(current + 1);
+      showQuestion(0);
+    }
+    function showQuestion(i) {
+      const pages = [...document.querySelectorAll('#questions .q-page')];
+      if (pages.length === 0) return;
+      current = Math.max(0, Math.min(i, pages.length - 1));
+      pages.forEach((c, idx) => c.classList.toggle('hidden', idx !== current));
+      const last = current === pages.length - 1;
+      document.getElementById('progress').textContent = `Question ${current + 1} of ${pages.length}`;
+      document.getElementById('prev-btn').disabled = current === 0;
+      document.getElementById('next-btn').classList.toggle('hidden', last);
+      document.getElementById('submit-btn').classList.toggle('hidden', !last);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     }
 
     document.getElementById('test-form').addEventListener('submit', async (e) => {
