@@ -485,25 +485,68 @@ app.post('/api/orgs', requireAdmin, h(async (req, res) => {
   res.json({ id, name });
 }));
 
-// List all organizations with their teachers (signed up + pending) and counts.
+// List organizations with their teachers (signed up + pending) and counts.
+// Optional ?q= filters by organization name (case-insensitive).
 app.get('/api/orgs', requireAdmin, h(async (req, res) => {
-  const orgs = await all('SELECT id, name FROM organizations ORDER BY name');
+  const q = (req.query.q || '').trim();
+  const orgs = q
+    ? await all("SELECT id, name FROM organizations WHERE name ILIKE ? ESCAPE '\\' ORDER BY name",
+        ['%' + q.replace(/[\\%_]/g, '\\$&') + '%'])
+    : await all('SELECT id, name FROM organizations ORDER BY name');
   const result = [];
   for (const o of orgs) {
     const signedUp = await all(
-      "SELECT name, email, phone, is_root, disabled FROM users WHERE role = 'teacher' AND org_id = ? ORDER BY id", [o.id]
+      "SELECT id, name, email, phone, is_root, disabled FROM users WHERE role = 'teacher' AND org_id = ? ORDER BY id", [o.id]
     );
     const pending = await all(
       "SELECT name, email, phone, is_root, token FROM signup_tokens WHERE invite_role = 'teacher' AND used = 0 AND org_id = ? ORDER BY created_at DESC", [o.id]
     );
     const studentCount = (await get("SELECT COUNT(*) AS c FROM users WHERE role = 'student' AND org_id = ?", [o.id])).c;
     const teachers = [
-      ...signedUp.map((u) => ({ name: u.name, email: u.email, phone: u.phone, isRoot: !!u.is_root, disabled: !!u.disabled, signedUp: true, signupPath: null })),
-      ...pending.map((p) => ({ name: p.name, email: p.email, phone: p.phone, isRoot: !!p.is_root, disabled: false, signedUp: false, signupPath: `/signup.html?token=${p.token}` })),
+      ...signedUp.map((u) => ({ id: u.id, name: u.name, email: u.email, phone: u.phone, isRoot: !!u.is_root, disabled: !!u.disabled, signedUp: true, signupPath: null })),
+      ...pending.map((p) => ({ id: null, name: p.name, email: p.email, phone: p.phone, isRoot: !!p.is_root, disabled: false, signedUp: false, signupPath: `/signup.html?token=${p.token}` })),
     ];
     result.push({ id: o.id, name: o.name, teachers, teacherCount: signedUp.length, studentCount });
   }
   res.json({ orgs: result });
+}));
+
+// Admin enables/disables any teacher (in any organization). A disabled teacher
+// is logged out immediately and cannot log in.
+app.patch('/api/admin/teachers/:id', requireAdmin, h(async (req, res) => {
+  const teacherId = Number(req.params.id);
+  const t = await get("SELECT id FROM users WHERE id = ? AND role = 'teacher'", [teacherId]);
+  if (!t) return res.status(404).json({ error: 'Teacher not found.' });
+  const disabled = req.body.disabled ? 1 : 0;
+  await run('UPDATE users SET disabled = ? WHERE id = ?', [disabled, teacherId]);
+  if (disabled) await run('DELETE FROM sessions WHERE user_id = ?', [teacherId]);
+  res.json({ ok: true, disabled: !!disabled });
+}));
+
+// Admin edits a teacher (name, phone, root status). Email is immutable.
+app.put('/api/admin/teachers/:id', requireAdmin, h(async (req, res) => {
+  const teacherId = Number(req.params.id);
+  const t = await get("SELECT id FROM users WHERE id = ? AND role = 'teacher'", [teacherId]);
+  if (!t) return res.status(404).json({ error: 'Teacher not found.' });
+  const name = (req.body.name || '').trim();
+  const phone = (req.body.phone || '').trim();
+  const isRoot = req.body.isRoot ? 1 : 0;
+  if (!name) return res.status(400).json({ error: 'Teacher name is required.' });
+  if (!phone) return res.status(400).json({ error: 'Teacher phone number is required.' });
+  if (!/^[\d+()\-\s]{6,20}$/.test(phone))
+    return res.status(400).json({ error: 'Please enter a valid phone number.' });
+  await run('UPDATE users SET name = ?, phone = ?, is_root = ? WHERE id = ?', [name, phone, isRoot, teacherId]);
+  res.json({ ok: true });
+}));
+
+// Admin renames an organization.
+app.put('/api/orgs/:id', requireAdmin, h(async (req, res) => {
+  const name = (req.body.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'Organization name is required.' });
+  const org = await get('SELECT id FROM organizations WHERE id = ?', [Number(req.params.id)]);
+  if (!org) return res.status(404).json({ error: 'Organization not found.' });
+  await run('UPDATE organizations SET name = ? WHERE id = ?', [name, org.id]);
+  res.json({ ok: true });
 }));
 
 // Admin creates a root teacher for an organization (returns a signup link).

@@ -90,4 +90,62 @@ if (!a.teachers.some((t) => t.email === `rta${rand}@x.com`)) throw new Error('or
 if (a.studentCount !== 1) throw new Error('org A should report 1 student, got ' + a.studentCount);
 ok('admin sees all organizations with their teachers and counts');
 
+// Admin renames an organization.
+if ((await call(admin, '/api/orgs/' + orgA.id, 'PUT', { name: `Org A Renamed ${rand}` })).status !== 200)
+  throw new Error('rename should succeed');
+if ((await call(admin, '/api/orgs/' + orgA.id, 'PUT', { name: '' }, false)).status !== 400)
+  throw new Error('blank org name should be 400');
+const renamed = (await call(admin, '/api/orgs')).data.orgs.find((o) => o.id === orgA.id);
+if (renamed.name !== `Org A Renamed ${rand}`) throw new Error('org rename did not persist');
+if ((await call(rootA, '/api/orgs/' + orgA.id, 'PUT', { name: 'Nope' }, false)).status !== 403)
+  throw new Error('non-admin renaming an org should be 403');
+ok('admin can rename an organization (non-admin blocked)');
+
+// Admin can change their own password.
+if ((await call(admin, '/api/change-password', 'POST', { currentPassword: 'wrong', newPassword: 'adminpass2' }, false)).status !== 403)
+  throw new Error('wrong current password should be 403');
+if ((await call(admin, '/api/change-password', 'POST', { currentPassword: 'adminpass1', newPassword: 'adminpass2' })).status !== 200)
+  throw new Error('admin password change should succeed');
+if ((await call(makeJar(), '/api/login', 'POST', { email: adminEmail, password: 'adminpass1' }, false)).status !== 401)
+  throw new Error('old admin password should fail');
+if ((await call(makeJar(), '/api/login', 'POST', { email: adminEmail, password: 'adminpass2' }, false)).status !== 200)
+  throw new Error('new admin password should work');
+ok('admin can change their own password');
+
+// Admin can disable/enable any teacher.
+if ((await call(rootB, '/api/admin/teachers/' + uA.id, 'PATCH', { disabled: true }, false)).status !== 403)
+  throw new Error('non-admin should not use admin disable');
+if ((await call(admin, '/api/admin/teachers/' + uA.id, 'PATCH', { disabled: true })).status !== 200)
+  throw new Error('admin disable should succeed');
+if ((await call(makeJar(), '/api/login', 'POST', { email: `rta${rand}@x.com`, password: 'pass123' }, false)).status !== 403)
+  throw new Error('disabled teacher login should be 403');
+await call(admin, '/api/admin/teachers/' + uA.id, 'PATCH', { disabled: false });
+if ((await call(makeJar(), '/api/login', 'POST', { email: `rta${rand}@x.com`, password: 'pass123' }, false)).status !== 200)
+  throw new Error('re-enabled teacher should log in');
+ok('admin can disable and re-enable teachers (non-admin blocked)');
+
+// Admin can edit a teacher (name, phone, role) — email is immutable.
+if ((await call(admin, '/api/admin/teachers/' + uA.id, 'PUT', { name: 'RootA Renamed', phone: '9123123123', isRoot: false, email: `hack${rand}@x.com` })).status !== 200)
+  throw new Error('admin edit teacher should succeed');
+const editedOrgs = (await call(admin, '/api/orgs')).data.orgs.find((o) => o.id === orgA.id);
+const editedT = editedOrgs.teachers.find((t) => t.id === uA.id);
+if (editedT.name !== 'RootA Renamed' || editedT.phone !== '9123123123' || editedT.isRoot)
+  throw new Error('teacher edit did not persist (name/phone/role)');
+if (editedT.email !== `rta${rand}@x.com`) throw new Error('teacher email must not change');
+if ((await call(rootB, '/api/admin/teachers/' + uA.id, 'PUT', { name: 'x', phone: '9' }, false)).status !== 403)
+  throw new Error('non-admin editing a teacher should be 403');
+if ((await call(admin, '/api/admin/teachers/' + uA.id, 'PUT', { name: '', phone: '9123123123' }, false)).status !== 400)
+  throw new Error('blank name should be 400');
+ok('admin can edit a teacher (name/phone/role); email immutable; non-admin blocked');
+
+// Admin can search organizations by name (server-side).
+const uniq = `Zephyr${rand}`;
+const searchOrg = (await call(admin, '/api/orgs', 'POST', { name: `${uniq} Academy` })).data;
+let found = (await call(admin, '/api/orgs?q=' + encodeURIComponent(uniq.toLowerCase()))).data.orgs;
+if (found.length !== 1 || found[0].id !== searchOrg.id) throw new Error('org search should find exactly the one org');
+if ((await call(admin, '/api/orgs?q=' + encodeURIComponent(`nomatch${rand}`))).data.orgs.length !== 0)
+  throw new Error('no-match search should return empty');
+if ((await call(admin, '/api/orgs')).data.orgs.length < 3) throw new Error('empty query should return all orgs');
+ok('admin can search organizations by name (case-insensitive, server-side)');
+
 console.log('\n✅ ADMIN-TEST: ALL CHECKS PASSED\n');

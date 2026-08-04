@@ -11,7 +11,59 @@
     <a class="brand" href="/admin.html">📝 Test<span>Platform</span></a>
     <div class="row">
       <span class="user" id="who"></span>
+      <button class="btn ghost small" onclick="openProfile()">⚙ Profile</button>
       <button class="btn ghost small" onclick="logout()">Log out</button>
+    </div>
+  </div>
+
+  <!-- Profile / change-password modal -->
+  <div id="profile-modal" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="row" style="justify-content:space-between; align-items:center">
+        <h2 style="margin:0">Profile</h2>
+        <button class="btn ghost small" onclick="closeProfile()">✕</button>
+      </div>
+      <p class="muted" id="profile-info" style="margin-top:6px"></p>
+      <div id="profile-msg" class="msg hidden"></div>
+      <h3 style="margin-top:16px">Change password</h3>
+      <form id="password-form">
+        <label>Current password</label>
+        <input type="password" id="cur-pass" required autocomplete="current-password">
+        <label>New password (min 6 characters)</label>
+        <input type="password" id="new-pass" required autocomplete="new-password">
+        <label>Confirm new password</label>
+        <input type="password" id="confirm-pass" required autocomplete="new-password">
+        <div class="row" style="margin-top:18px">
+          <button class="btn" type="submit">Update password</button>
+          <button class="btn ghost" type="button" onclick="closeProfile()">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Edit teacher modal -->
+  <div id="teacher-modal" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="row" style="justify-content:space-between; align-items:center">
+        <h2 style="margin:0">Edit teacher</h2>
+        <button class="btn ghost small" onclick="closeTeacherModal()">✕</button>
+      </div>
+      <div id="et-msg" class="msg hidden"></div>
+      <label>Name</label>
+      <input type="text" id="et-name">
+      <label>Email (cannot be changed)</label>
+      <input type="email" id="et-email" disabled>
+      <label>Phone number</label>
+      <input type="tel" id="et-phone">
+      <label>Role</label>
+      <select id="et-role">
+        <option value="teacher">Teacher</option>
+        <option value="root">Root teacher</option>
+      </select>
+      <div class="row" style="margin-top:18px">
+        <button class="btn" onclick="saveTeacherEdit()">Save changes</button>
+        <button class="btn ghost" onclick="closeTeacherModal()">Cancel</button>
+      </div>
     </div>
   </div>
 
@@ -24,6 +76,7 @@
         <div style="flex:1"><label>New organization name</label><input type="text" id="org-name" placeholder="e.g. Springfield High"></div>
         <button class="btn" onclick="createOrg()">Create organization</button>
       </div>
+      <input type="text" id="org-search" placeholder="🔍 Search organizations by name..." style="margin-top:14px" oninput="onOrgSearch()">
     </div>
 
     <div id="orgs"></div>
@@ -41,21 +94,94 @@
       loadOrgs();
     })();
 
+    // ---- Profile / change password ----
+    function openProfile() {
+      document.getElementById('profile-info').textContent = ME ? `${ME.name} · ${ME.email}` : '';
+      document.getElementById('profile-msg').classList.add('hidden');
+      document.getElementById('password-form').reset();
+      document.getElementById('profile-modal').classList.remove('hidden');
+    }
+    function closeProfile() { document.getElementById('profile-modal').classList.add('hidden'); }
+    document.getElementById('password-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const currentPassword = document.getElementById('cur-pass').value;
+      const newPassword = document.getElementById('new-pass').value;
+      if (newPassword !== document.getElementById('confirm-pass').value) {
+        showMsg('profile-msg', 'The new passwords do not match.'); return;
+      }
+      try {
+        await api('/api/change-password', 'POST', { currentPassword, newPassword });
+        showMsg('profile-msg', 'Password updated successfully! Other devices have been logged out.', 'ok');
+        document.getElementById('password-form').reset();
+      } catch (err) { showMsg('profile-msg', err.message); }
+    });
+    document.getElementById('profile-modal').addEventListener('click', (e) => {
+      if (e.target.id === 'profile-modal') closeProfile();
+    });
+
+    // ---- Edit teacher (email not editable) ----
+    let editingTeacherId = null;
+    function openTeacherEdit(t) {
+      editingTeacherId = t.id;
+      document.getElementById('et-name').value = t.name;
+      document.getElementById('et-email').value = t.email;
+      document.getElementById('et-phone').value = t.phone || '';
+      document.getElementById('et-role').value = t.isRoot ? 'root' : 'teacher';
+      document.getElementById('et-msg').classList.add('hidden');
+      document.getElementById('teacher-modal').classList.remove('hidden');
+    }
+    function closeTeacherModal() { document.getElementById('teacher-modal').classList.add('hidden'); }
+    async function saveTeacherEdit() {
+      try {
+        await api('/api/admin/teachers/' + editingTeacherId, 'PUT', {
+          name: document.getElementById('et-name').value.trim(),
+          phone: document.getElementById('et-phone').value.trim(),
+          isRoot: document.getElementById('et-role').value === 'root',
+        });
+        closeTeacherModal();
+        refreshOrgs();
+      } catch (err) { showMsg('et-msg', err.message); }
+    }
+    document.getElementById('teacher-modal').addEventListener('click', (e) => {
+      if (e.target.id === 'teacher-modal') closeTeacherModal();
+    });
+
+    async function toggleTeacher(teacherId, disable, name) {
+      if (disable && !confirm(`Disable ${name}? They will be logged out immediately and cannot log in until you re-enable them.`)) return;
+      try {
+        await api('/api/admin/teachers/' + teacherId, 'PATCH', { disabled: disable });
+        refreshOrgs();
+      } catch (err) { alert(err.message); }
+    }
+
     async function createOrg() {
       const name = document.getElementById('org-name').value.trim();
       if (!name) { showMsg('org-msg', 'Enter an organization name.'); return; }
       try {
         await api('/api/orgs', 'POST', { name });
         document.getElementById('org-name').value = '';
+        document.getElementById('org-search').value = '';
         showMsg('org-msg', 'Organization created.', 'ok');
         loadOrgs();
       } catch (err) { showMsg('org-msg', err.message); }
     }
 
-    async function loadOrgs() {
-      const { orgs } = await api('/api/orgs');
+    let orgSearchTimer = null;
+    function onOrgSearch() {
+      clearTimeout(orgSearchTimer);
+      orgSearchTimer = setTimeout(() => loadOrgs(document.getElementById('org-search').value.trim()), 250);
+    }
+    function refreshOrgs() { return loadOrgs(document.getElementById('org-search').value.trim()); }
+
+    async function loadOrgs(query = '') {
+      const { orgs } = await api('/api/orgs' + (query ? '?q=' + encodeURIComponent(query) : ''));
       const box = document.getElementById('orgs');
-      if (orgs.length === 0) { box.innerHTML = '<div class="card"><p class="muted">No organizations yet. Create one above.</p></div>'; return; }
+      if (orgs.length === 0) {
+        box.innerHTML = query
+          ? `<div class="card"><p class="muted">No organizations match “${escapeHtml(query)}”.</p></div>`
+          : '<div class="card"><p class="muted">No organizations yet. Create one above.</p></div>';
+        return;
+      }
       box.innerHTML = '';
       orgs.forEach((o) => box.append(renderOrg(o)));
     }
@@ -63,7 +189,10 @@
     function renderOrg(o) {
       const card = el(`<div class="card">
         <div class="row" style="justify-content:space-between; align-items:center">
-          <h2 style="margin:0">${escapeHtml(o.name)}</h2>
+          <div class="row" style="align-items:center; gap:8px">
+            <h2 style="margin:0" class="org-name">${escapeHtml(o.name)}</h2>
+            <button class="btn ghost small org-rename">Rename</button>
+          </div>
           <span class="muted">${o.teacherCount} teacher(s) · ${o.studentCount} student(s)</span>
         </div>
         <div class="org-msg msg hidden"></div>
@@ -75,7 +204,7 @@
           <div><label>Email</label><input type="email" class="rt-email"></div>
           <div><label>Phone number</label><input type="tel" class="rt-phone" placeholder="e.g. +91 98765 43210"></div>
         </div>
-        <div style="margin-top:12px"><button class="btn secondary">Create root teacher & get link</button></div>
+        <div style="margin-top:12px"><button class="btn secondary rt-submit">Create root teacher & get link</button></div>
       </div>`);
 
       const tbox = card.querySelector('.teachers');
@@ -94,7 +223,13 @@
           </tr>`);
           const st = tr.querySelector('.st');
           if (t.signedUp) {
-            st.innerHTML = t.disabled ? '<span class="pill gray">disabled</span>' : '<span class="pill green">signed up</span>';
+            st.innerHTML = t.disabled ? '<span class="pill gray">disabled</span>' : '<span class="pill green">active</span>';
+            const toggle = el(`<button class="btn ${t.disabled ? 'secondary' : 'danger'} small" style="margin-left:8px">${t.disabled ? 'Enable' : 'Disable'}</button>`);
+            toggle.onclick = () => toggleTeacher(t.id, !t.disabled, t.name);
+            st.append(toggle);
+            const editBtn = el('<button class="btn ghost small" style="margin-left:8px">Edit</button>');
+            editBtn.onclick = () => openTeacherEdit(t);
+            st.append(editBtn);
           } else {
             const link = location.origin + t.signupPath;
             const b = el('<button class="btn secondary small">Copy link</button>');
@@ -108,15 +243,35 @@
       }
 
       const msg = card.querySelector('.org-msg');
-      card.querySelector('button.btn.secondary').onclick = async () => {
+      card.querySelector('.rt-submit').onclick = async () => {
         const name = card.querySelector('.rt-name').value.trim();
         const email = card.querySelector('.rt-email').value.trim();
         const phone = card.querySelector('.rt-phone').value.trim();
         try {
           await api('/api/admin/root-teachers', 'POST', { orgId: o.id, name, email, phone });
           showMsg(msg, 'Root teacher created. Copy their signup link from the table above.', 'ok');
-          loadOrgs();
+          refreshOrgs();
         } catch (err) { showMsg(msg, err.message); }
+      };
+
+      // Inline rename of the organization.
+      card.querySelector('.org-rename').onclick = () => {
+        const header = card.querySelector('.org-name').parentNode; // the h2 + Rename row
+        const editor = el('<div class="row" style="align-items:center; gap:8px"></div>');
+        const input = el('<input type="text" style="width:auto">');
+        input.value = o.name;
+        const save = el('<button class="btn small">Save</button>');
+        const cancel = el('<button class="btn ghost small">Cancel</button>');
+        editor.append(input, save, cancel);
+        header.replaceWith(editor);
+        input.focus();
+        cancel.onclick = () => refreshOrgs();
+        save.onclick = async () => {
+          const newName = input.value.trim();
+          if (!newName) { showMsg(msg, 'Enter an organization name.'); return; }
+          try { await api('/api/orgs/' + o.id, 'PUT', { name: newName }); refreshOrgs(); }
+          catch (err) { showMsg(msg, err.message); }
+        };
       };
       return card;
     }
