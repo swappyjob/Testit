@@ -77,6 +77,16 @@ if ((await call(normal, '/api/teachers', 'POST', { name: 'X', email: `x${rand}@x
   throw new Error('normal teacher adding a teacher should be 403');
 ok('normal teacher can view the roster but cannot add teachers (403)');
 
+// Students are shared across the organization: a student created by the root
+// is visible to (and manageable by) another teacher in the same org.
+const os = (await call(root, '/api/students', 'POST', { name: 'OrgStudent', email: `os${rand}@x.com`, phone: '9000000005' })).data;
+const seen = (await call(normal, '/api/students')).data.students.find((s) => s.email === `os${rand}@x.com`);
+if (!seen) throw new Error('a teacher should see students created by others in the same org');
+// The normal teacher can edit that shared student (same org).
+if ((await call(normal, '/api/students/' + seen.id, 'PUT', { name: 'OrgStudent Edited', phone: '9000000006' })).status !== 200)
+  throw new Error('a same-org teacher should be able to edit the shared student');
+ok('students are shared across the organization (any teacher can see and manage them)');
+
 // Root-invited teacher signs up as root and can manage teachers
 const boss = makeJar();
 const bu = (await call(boss, '/api/signup/' + t2.token, 'POST', { password: 'pass123' })).data.user;

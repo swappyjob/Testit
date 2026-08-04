@@ -108,7 +108,9 @@ app.use(h(async (req, res, next) => {
   const sid = parseCookies(req).sid;
   if (sid) {
     const row = await get(
-      `SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ? AND u.disabled = 0`,
+      `SELECT u.*, o.name AS org_name FROM sessions s JOIN users u ON u.id = s.user_id
+         LEFT JOIN organizations o ON o.id = u.org_id
+        WHERE s.token = ? AND u.disabled = 0`,
       [sid]
     );
     // Students past their access end date are treated as logged out.
@@ -147,7 +149,7 @@ async function startSession(res, userId) {
   res.cookie('sid', token, { httpOnly: true, sameSite: 'lax', maxAge: 1000 * 60 * 60 * 24 * 7 });
 }
 
-const publicUser = (u) => ({ id: u.id, role: u.role, name: u.name, email: u.email, isRoot: !!u.is_root, orgId: u.org_id });
+const publicUser = (u) => ({ id: u.id, role: u.role, name: u.name, email: u.email, isRoot: !!u.is_root, orgId: u.org_id, orgName: u.org_name || null });
 
 // ============================================================================
 // AUTH
@@ -292,21 +294,22 @@ app.post('/api/students', requireAuth('teacher'), h(async (req, res) => {
 // List this teacher's students + pending invites.
 app.get('/api/students', requireAuth('teacher'), h(async (req, res) => {
   const q = (req.query.q || '').trim();
+  // Students belong to the organization, so every teacher in the org sees them all.
   const base =
     `SELECT t.id AS token_id, t.name, t.email, t.phone, t.access_until, t.token, t.used, t.student_id, u.disabled
        FROM signup_tokens t
        LEFT JOIN users u ON u.id = t.student_id
-      WHERE t.teacher_id = ? AND t.invite_role = 'student'`;
+      WHERE t.org_id = ? AND t.invite_role = 'student'`;
   let invites;
   if (q) {
     // Escape LIKE wildcards so the user's text is matched literally. ILIKE = case-insensitive.
     const like = '%' + q.replace(/[\\%_]/g, '\\$&') + '%';
     invites = await all(
       `${base} AND (t.name ILIKE ? ESCAPE '\\' OR t.email ILIKE ? ESCAPE '\\') ORDER BY t.created_at DESC`,
-      [req.user.id, like, like]
+      [req.user.org_id, like, like]
     );
   } else {
-    invites = await all(`${base} ORDER BY t.created_at DESC`, [req.user.id]);
+    invites = await all(`${base} ORDER BY t.created_at DESC`, [req.user.org_id]);
   }
   const students = invites.map((i) => ({
     id: i.token_id,
@@ -330,8 +333,8 @@ app.get('/api/students/export.csv', requireAuth('teacher'), h(async (req, res) =
             to_char(t.created_at, 'YYYY-MM-DD HH24:MI') AS created_at
        FROM signup_tokens t
        LEFT JOIN users u ON u.id = t.student_id
-      WHERE t.teacher_id = ? AND t.invite_role = 'student' ORDER BY t.created_at DESC`,
-    [req.user.id]
+      WHERE t.org_id = ? AND t.invite_role = 'student' ORDER BY t.created_at DESC`,
+    [req.user.org_id]
   );
 
   const esc = (v) => {
@@ -356,8 +359,8 @@ app.get('/api/students/export.csv', requireAuth('teacher'), h(async (req, res) =
 app.patch('/api/students/:id', requireAuth('teacher'), h(async (req, res) => {
   const studentId = Number(req.params.id);
   const owned = await get(
-    'SELECT 1 FROM signup_tokens WHERE teacher_id = ? AND student_id = ?',
-    [req.user.id, studentId]
+    "SELECT 1 FROM users WHERE id = ? AND role = 'student' AND org_id = ?",
+    [studentId, req.user.org_id]
   );
   if (!owned) return res.status(404).json({ error: 'Student not found.' });
   const disabled = req.body.disabled ? 1 : 0;
@@ -370,8 +373,8 @@ app.patch('/api/students/:id', requireAuth('teacher'), h(async (req, res) => {
 // :id is the signup-invite id (works for pending and signed-up students).
 app.put('/api/students/:id', requireAuth('teacher'), h(async (req, res) => {
   const tok = await get(
-    "SELECT * FROM signup_tokens WHERE id = ? AND teacher_id = ? AND invite_role = 'student'",
-    [Number(req.params.id), req.user.id]
+    "SELECT * FROM signup_tokens WHERE id = ? AND org_id = ? AND invite_role = 'student'",
+    [Number(req.params.id), req.user.org_id]
   );
   if (!tok) return res.status(404).json({ error: 'Student not found.' });
   const name = (req.body.name || '').trim();
@@ -394,7 +397,7 @@ app.put('/api/students/:id', requireAuth('teacher'), h(async (req, res) => {
 // Teacher generates a password-reset link for one of their students.
 app.post('/api/students/:id/reset-link', requireAuth('teacher'), h(async (req, res) => {
   const studentId = Number(req.params.id);
-  const owned = await get('SELECT 1 FROM signup_tokens WHERE teacher_id = ? AND student_id = ?', [req.user.id, studentId]);
+  const owned = await get("SELECT 1 FROM users WHERE id = ? AND role = 'student' AND org_id = ?", [studentId, req.user.org_id]);
   if (!owned) return res.status(404).json({ error: 'Student not found.' });
   const token = await createResetToken(studentId);
   res.json({ resetPath: `/reset.html?token=${token}` });
@@ -787,7 +790,7 @@ app.post('/api/assignments', requireAuth('teacher'), h(async (req, res) => {
   let added = 0;
   await tx(async (t) => {
     for (const sid of studentIds) {
-      const student = await t.get("SELECT id FROM users WHERE id = ? AND role = 'student'", [sid]);
+      const student = await t.get("SELECT id FROM users WHERE id = ? AND role = 'student' AND org_id = ?", [sid, req.user.org_id]);
       if (student) {
         const r = await t.run(
           'INSERT INTO assignments (test_id, student_id, teacher_id) VALUES (?, ?, ?) ON CONFLICT (test_id, student_id) DO NOTHING',
