@@ -7,7 +7,7 @@ export default function StudentsTab() {
   const [query, setQuery] = useState('');
   const [form, setForm] = useState({ name: '', email: '', phone: '', accessUntil: '' });
   const [msg, setMsg] = useState(null); // { text, ok }
-  const [editing, setEditing] = useState(null);
+  const [selectedId, setSelectedId] = useState(null); // signup-invite id (s.id)
   const timer = useRef(null);
 
   const load = (q = query) => api('/api/students' + (q ? '?q=' + encodeURIComponent(q) : '')).then((d) => setStudents(d.students));
@@ -20,31 +20,24 @@ export default function StudentsTab() {
       await api('/api/students', 'POST', form);
       setForm({ name: '', email: '', phone: '', accessUntil: '' });
       setQuery('');
-      setMsg({ text: 'Student created! Use the "Copy link" button in the table to share their signup link.', ok: true });
+      setMsg({ text: 'Student created! Click the student to open their page and copy the signup link.', ok: true });
       load('');
     } catch (e) { setMsg({ text: e.message, ok: false }); }
   }
 
-  async function toggle(s) {
-    if (!s.disabled && !window.confirm(`Disable ${s.name}? They will be logged out immediately and cannot log in until re-enabled.`)) return;
-    await api('/api/students/' + s.studentId, 'PATCH', { disabled: !s.disabled });
-    load();
-  }
-  async function copyLink(text, btn) {
-    await navigator.clipboard.writeText(text);
-    const prev = btn.textContent; btn.textContent = 'Copied!';
-    setTimeout(() => { btn.textContent = prev; }, 1500);
-  }
-  async function copyReset(s, btn) {
-    try { const { resetPath } = await api('/api/students/' + s.studentId + '/reset-link', 'POST'); await copyLink(window.location.origin + resetPath, btn); }
-    catch (e) { alert(e.message); }
+  const selected = selectedId != null && students ? students.find((s) => s.id === selectedId) : null;
+  // If the selected student vanished (e.g. after a search), drop back to the list.
+  useEffect(() => { if (selectedId != null && students && !selected) setSelectedId(null); }, [students]);
+
+  if (selected) {
+    return <StudentDetail student={selected} onBack={() => setSelectedId(null)} onChanged={() => load()} />;
   }
 
   return (
     <>
       <div className="card">
         <h1>Add a student</h1>
-        <p className="muted">Create a student, then copy their unique signup link and send it to them.</p>
+        <p className="muted">Create a student, then open their page to copy their unique signup link and send it to them.</p>
         {msg && <Msg text={msg.text} kind={msg.ok ? 'ok' : 'error'} />}
         <div className="grid two">
           <div><label>Student name</label><input type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></div>
@@ -66,39 +59,99 @@ export default function StudentsTab() {
           <p className="muted">{query ? `No students match “${query}”.` : 'No students yet.'}</p>
         ) : (
           <table>
-            <thead><tr><th>Name</th><th>Email</th><th>Mobile number</th><th>Access until</th><th>Signup link</th><th>Status</th></tr></thead>
+            <thead><tr><th>Name</th><th>Email</th><th>Mobile number</th><th>Access until</th><th>Status</th></tr></thead>
             <tbody>
               {students.map((s) => (
-                <tr key={s.id}>
-                  <td>{s.name}</td>
+                <tr key={s.id} style={{ cursor: 'pointer' }} onClick={() => setSelectedId(s.id)}>
+                  <td><a href="#" onClick={(e) => e.preventDefault()} style={{ fontWeight: 600 }}>{s.name}</a></td>
                   <td>{s.email}</td>
                   <td>{s.phone || <span className="muted">—</span>}</td>
                   <td>{s.accessUntil ? <span style={{ color: s.expired ? 'var(--red)' : undefined }}>{s.accessUntil}</span> : <span className="muted">—</span>}</td>
-                  <td>
-                    {!s.signedUp
-                      ? <button className="btn secondary small" onClick={(e) => copyLink(window.location.origin + s.signupPath, e.target)}>Copy link</button>
-                      : <span className="muted">—</span>}
-                  </td>
-                  <td>
-                    {!s.signedUp ? <span className="pill amber">invite pending</span> : (
-                      <>
-                        {s.disabled ? <span className="pill gray">disabled</span> : s.expired ? <span className="pill gray">expired</span> : <span className="pill green">active</span>}
-                        <button className={`btn ${s.disabled ? 'secondary' : 'danger'} small`} style={{ marginLeft: 8 }} onClick={() => toggle(s)}>{s.disabled ? 'Enable' : 'Disable'}</button>
-                        <button className="btn secondary small" style={{ marginLeft: 8 }} onClick={(e) => copyReset(s, e.target)}>Reset link</button>
-                      </>
-                    )}
-                    <button className="btn ghost small" style={{ marginLeft: 8 }} onClick={() => setEditing(s)}>Edit</button>
-                  </td>
+                  <td><StatusPill s={s} /></td>
                 </tr>
               ))}
             </tbody>
           </table>
         )}
       </div>
-
-      {editing && <EditStudentModal student={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} />}
     </>
   );
+}
+
+function StatusPill({ s }) {
+  if (!s.signedUp) return <span className="pill amber">invite pending</span>;
+  if (s.disabled) return <span className="pill gray">disabled</span>;
+  if (s.expired) return <span className="pill gray">expired</span>;
+  return <span className="pill green">active</span>;
+}
+
+function Field({ label, children }) {
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <div className="muted" style={{ fontSize: 13, fontWeight: 600 }}>{label}</div>
+      <div style={{ fontSize: 15 }}>{children}</div>
+    </div>
+  );
+}
+
+function StudentDetail({ student: s, onBack, onChanged }) {
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null); // { text, ok }
+
+  async function toggle() {
+    if (!s.disabled && !window.confirm(`Disable ${s.name}? They will be logged out immediately and cannot log in until re-enabled.`)) return;
+    setBusy(true);
+    try { await api('/api/students/' + s.studentId, 'PATCH', { disabled: !s.disabled }); await onChanged(); }
+    catch (e) { setMsg({ text: e.message, ok: false }); } finally { setBusy(false); }
+  }
+  async function copyResetLink(btn) {
+    try { const { resetPath } = await api('/api/students/' + s.studentId + '/reset-link', 'POST'); await copyToClipboard(window.location.origin + resetPath, btn); }
+    catch (e) { setMsg({ text: e.message, ok: false }); }
+  }
+
+  return (
+    <>
+      <div className="card">
+        <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+          <h1 style={{ margin: 0 }}>{s.name}</h1>
+          <button className="btn ghost small" onClick={onBack}>← Back to students</button>
+        </div>
+        {msg && <Msg text={msg.text} kind={msg.ok ? 'ok' : 'error'} />}
+
+        <div className="grid two" style={{ marginTop: 16 }}>
+          <Field label="Email">{s.email}</Field>
+          <Field label="Mobile number">{s.phone || '—'}</Field>
+          <Field label="Access until">{s.accessUntil ? <span style={{ color: s.expired ? 'var(--red)' : undefined }}>{s.accessUntil}{s.expired ? ' (expired)' : ''}</span> : 'No end date'}</Field>
+          <Field label="Status"><StatusPill s={s} /></Field>
+        </div>
+
+        <div className="row" style={{ marginTop: 8 }}>
+          {!s.signedUp ? (
+            <button className="btn secondary" onClick={(e) => copyToClipboard(window.location.origin + s.signupPath, e.target)}>Copy signup link</button>
+          ) : (
+            <>
+              <button className="btn secondary" onClick={() => setEditing(true)} disabled={busy}>Edit</button>
+              <button className={s.disabled ? 'btn secondary' : 'btn danger'} onClick={toggle} disabled={busy}>{s.disabled ? 'Enable account' : 'Disable account'}</button>
+              <button className="btn secondary" onClick={(e) => copyResetLink(e.target)} disabled={busy}>Copy password-reset link</button>
+            </>
+          )}
+        </div>
+        {!s.signedUp && (
+          <p className="muted" style={{ fontSize: 13, marginTop: 12 }}>This student hasn't signed up yet. Share the signup link so they can set their password.</p>
+        )}
+      </div>
+
+      {editing && <EditStudentModal student={s} onClose={() => setEditing(false)} onSaved={async () => { setEditing(false); await onChanged(); }} />}
+    </>
+  );
+}
+
+async function copyToClipboard(text, btn) {
+  await navigator.clipboard.writeText(text);
+  const prev = btn.textContent;
+  btn.textContent = 'Copied!';
+  setTimeout(() => { btn.textContent = prev; }, 1500);
 }
 
 function EditStudentModal({ student, onClose, onSaved }) {
