@@ -9,7 +9,12 @@ echo   Keep THIS window open. Close it to stop the server.
 echo ================================================================
 echo.
 echo Building frontend...
-call npm --prefix client run build
+where npm >nul 2>nul
+if %errorlevel%==0 (
+  call npm --prefix client run build
+) else (
+  call "%ProgramFiles%\nodejs\npm.cmd" --prefix client run build
+)
 echo.
 echo Starting server...
 where node >nul 2>nul

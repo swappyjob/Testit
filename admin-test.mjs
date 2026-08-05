@@ -90,6 +90,44 @@ if (!a.teachers.some((t) => t.email === `rta${rand}@x.com`)) throw new Error('or
 if (a.studentCount !== 1) throw new Error('org A should report 1 student, got ' + a.studentCount);
 ok('admin sees all organizations with their teachers and counts');
 
+// --- Pricing plans ---
+const plans = (await call(admin, '/api/plans')).data.plans;
+if (plans.length < 5 || !plans.find((p) => p.name === 'Basic')) throw new Error('plans not seeded');
+ok('pricing plans are available to the admin');
+
+// New orgs default to Basic (100 students).
+const orgC = (await call(admin, '/api/orgs', 'POST', { name: `Org C ${rand}` })).data;
+const orgCrow = (await call(admin, '/api/orgs')).data.orgs.find((o) => o.id === orgC.id);
+if (orgCrow.planName !== 'Basic' || orgCrow.maxStudents !== 100) throw new Error('new org should default to Basic');
+ok('new organization defaults to the Basic plan');
+
+// Assign the Free plan (cap 15) to Org A and enforce the cap.
+const freePlan = plans.find((p) => p.name === 'Free');
+await call(admin, '/api/orgs/' + orgA.id + '/plan', 'PUT', { planId: freePlan.id });
+const orgArow = (await call(admin, '/api/orgs')).data.orgs.find((o) => o.id === orgA.id);
+if (orgArow.planName !== 'Free' || orgArow.maxStudents !== 15) throw new Error('plan assignment did not persist');
+ok('admin can assign a plan to an organization');
+
+for (let i = orgArow.studentCount; i < 15; i++) {
+  const r = await call(rootA, '/api/students', 'POST', { name: 'Cap' + i, email: `cap${i}_${rand}@x.com`, phone: '9000000000' });
+  if (r.status !== 200) throw new Error('should allow students up to the cap, failed at ' + i);
+}
+const over = await call(rootA, '/api/students', 'POST', { name: 'Over', email: `over${rand}@x.com`, phone: '9000000000' }, false);
+if (over.status !== 403) throw new Error('exceeding the plan cap should be 403, got ' + over.status);
+ok('student creation is blocked once the plan limit is reached (403)');
+
+// Upgrade to Enterprise (unlimited) removes the cap.
+const ent = plans.find((p) => p.name === 'Enterprise');
+await call(admin, '/api/orgs/' + orgA.id + '/plan', 'PUT', { planId: ent.id });
+if ((await call(rootA, '/api/students', 'POST', { name: 'Over2', email: `over2${rand}@x.com`, phone: '9000000000' })).status !== 200)
+  throw new Error('unlimited plan should allow more students');
+ok('upgrading to an unlimited plan removes the cap');
+
+// Plan management is admin-only.
+if ((await call(rootA, '/api/plans', 'GET', undefined, false)).status !== 403) throw new Error('non-admin listing plans should be 403');
+if ((await call(rootA, '/api/orgs/' + orgA.id + '/plan', 'PUT', { planId: ent.id }, false)).status !== 403) throw new Error('non-admin assigning a plan should be 403');
+ok('plan management is admin-only');
+
 // Admin renames an organization.
 if ((await call(admin, '/api/orgs/' + orgA.id, 'PUT', { name: `Org A Renamed ${rand}` })).status !== 200)
   throw new Error('rename should succeed');

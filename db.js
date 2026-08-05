@@ -173,6 +173,14 @@ async function init() {
       used       INTEGER NOT NULL DEFAULT 0,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+
+    CREATE TABLE IF NOT EXISTS plans (
+      id            SERIAL PRIMARY KEY,
+      name          TEXT NOT NULL UNIQUE,
+      max_students  INTEGER,               -- NULL = unlimited
+      price_monthly INTEGER NOT NULL DEFAULT 0,  -- in rupees; 0 shown as Free/Custom
+      sort_order    INTEGER NOT NULL DEFAULT 0
+    );
   `);
 
   // Forward-compatible column additions for databases created earlier.
@@ -184,6 +192,20 @@ async function init() {
   // Allow the new 'admin' role on databases created before it existed.
   await pool.query('ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check');
   await pool.query("ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('admin', 'teacher', 'student'))");
+
+  // Pricing plans: organizations reference a plan.
+  await pool.query('ALTER TABLE organizations ADD COLUMN IF NOT EXISTS plan_id INTEGER REFERENCES plans(id)');
+  const { rows: [{ c }] } = await pool.query('SELECT COUNT(*)::int AS c FROM plans');
+  if (c === 0) {
+    await pool.query(`INSERT INTO plans (name, max_students, price_monthly, sort_order) VALUES
+      ('Free',        15,   0,     1),
+      ('Basic',       100,  10000, 2),
+      ('Standard',    300,  24000, 3),
+      ('Pro',         750,  52500, 4),
+      ('Enterprise',  NULL, 0,     5)`);
+  }
+  // Existing organizations default to Basic.
+  await pool.query("UPDATE organizations SET plan_id = (SELECT id FROM plans WHERE name = 'Basic') WHERE plan_id IS NULL");
 }
 
 export { pool, all, get, run, tx, init };

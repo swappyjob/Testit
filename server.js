@@ -283,6 +283,17 @@ app.post('/api/students', requireAuth('teacher'), h(async (req, res) => {
   if (await get('SELECT id FROM signup_tokens WHERE email = ? AND used = 0', [email]))
     return res.status(409).json({ error: 'A pending invite for that email already exists.' });
 
+  // Enforce the organization's plan student limit (NULL cap = unlimited).
+  const plan = await get(
+    'SELECT p.max_students FROM organizations o LEFT JOIN plans p ON p.id = o.plan_id WHERE o.id = ?',
+    [req.user.org_id]
+  );
+  if (plan && plan.max_students != null) {
+    const used = (await get("SELECT COUNT(*) AS c FROM signup_tokens WHERE invite_role = 'student' AND org_id = ?", [req.user.org_id])).c;
+    if (used >= plan.max_students)
+      return res.status(403).json({ error: `Your organization has reached its plan's student limit (${plan.max_students}). Ask your administrator to upgrade the plan.` });
+  }
+
   const token = randomToken();
   await run(
     'INSERT INTO signup_tokens (token, name, email, phone, access_until, org_id, teacher_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
@@ -484,18 +495,39 @@ app.post('/api/teachers/:id/reset-link', requireRoot, h(async (req, res) => {
 app.post('/api/orgs', requireAdmin, h(async (req, res) => {
   const name = (req.body.name || '').trim();
   if (!name) return res.status(400).json({ error: 'Organization name is required.' });
-  const id = (await run('INSERT INTO organizations (name) VALUES (?) RETURNING id', [name])).rows[0].id;
+  const id = (await run(
+    "INSERT INTO organizations (name, plan_id) VALUES (?, (SELECT id FROM plans WHERE name = 'Basic')) RETURNING id",
+    [name]
+  )).rows[0].id;
   res.json({ id, name });
+}));
+
+// List the available pricing plans.
+app.get('/api/plans', requireAdmin, h(async (req, res) => {
+  const plans = await all('SELECT id, name, max_students, price_monthly FROM plans ORDER BY sort_order');
+  res.json({ plans });
+}));
+
+// Assign a plan to an organization.
+app.put('/api/orgs/:id/plan', requireAdmin, h(async (req, res) => {
+  const planId = Number(req.body.planId);
+  if (!(await get('SELECT id FROM organizations WHERE id = ?', [Number(req.params.id)])))
+    return res.status(404).json({ error: 'Organization not found.' });
+  if (!(await get('SELECT id FROM plans WHERE id = ?', [planId])))
+    return res.status(400).json({ error: 'Invalid plan.' });
+  await run('UPDATE organizations SET plan_id = ? WHERE id = ?', [planId, Number(req.params.id)]);
+  res.json({ ok: true });
 }));
 
 // List organizations with their teachers (signed up + pending) and counts.
 // Optional ?q= filters by organization name (case-insensitive).
 app.get('/api/orgs', requireAdmin, h(async (req, res) => {
   const q = (req.query.q || '').trim();
+  const cols = 'o.id, o.name, o.plan_id, p.name AS plan_name, p.max_students, p.price_monthly';
   const orgs = q
-    ? await all("SELECT id, name FROM organizations WHERE name ILIKE ? ESCAPE '\\' ORDER BY name",
+    ? await all(`SELECT ${cols} FROM organizations o LEFT JOIN plans p ON p.id = o.plan_id WHERE o.name ILIKE ? ESCAPE '\\' ORDER BY o.name`,
         ['%' + q.replace(/[\\%_]/g, '\\$&') + '%'])
-    : await all('SELECT id, name FROM organizations ORDER BY name');
+    : await all(`SELECT ${cols} FROM organizations o LEFT JOIN plans p ON p.id = o.plan_id ORDER BY o.name`);
   const result = [];
   for (const o of orgs) {
     const signedUp = await all(
@@ -504,12 +536,16 @@ app.get('/api/orgs', requireAdmin, h(async (req, res) => {
     const pending = await all(
       "SELECT name, email, phone, is_root, token FROM signup_tokens WHERE invite_role = 'teacher' AND used = 0 AND org_id = ? ORDER BY created_at DESC", [o.id]
     );
-    const studentCount = (await get("SELECT COUNT(*) AS c FROM users WHERE role = 'student' AND org_id = ?", [o.id])).c;
+    // Billable student count = student slots provisioned (invites), matching the plan cap.
+    const studentCount = (await get("SELECT COUNT(*) AS c FROM signup_tokens WHERE invite_role = 'student' AND org_id = ?", [o.id])).c;
     const teachers = [
       ...signedUp.map((u) => ({ id: u.id, name: u.name, email: u.email, phone: u.phone, isRoot: !!u.is_root, disabled: !!u.disabled, signedUp: true, signupPath: null })),
       ...pending.map((p) => ({ id: null, name: p.name, email: p.email, phone: p.phone, isRoot: !!p.is_root, disabled: false, signedUp: false, signupPath: `/signup?token=${p.token}` })),
     ];
-    result.push({ id: o.id, name: o.name, teachers, teacherCount: signedUp.length, studentCount });
+    result.push({
+      id: o.id, name: o.name, teachers, teacherCount: signedUp.length, studentCount,
+      planId: o.plan_id, planName: o.plan_name, maxStudents: o.max_students, priceMonthly: o.price_monthly,
+    });
   }
   res.json({ orgs: result });
 }));

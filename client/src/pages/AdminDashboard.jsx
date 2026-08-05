@@ -3,9 +3,14 @@ import { api } from '../api.js';
 import { useRequireRole } from '../auth.js';
 import { DashboardBar, Modal, Msg, PasswordInput } from '../components.jsx';
 
+export const fmtPrice = (p) =>
+  p.price_monthly > 0 ? '₹' + p.price_monthly.toLocaleString('en-IN') + '/mo' : p.max_students == null ? 'Custom' : 'Free';
+export const fmtCap = (p) => (p.max_students == null ? 'Unlimited students' : `up to ${p.max_students} students`);
+
 export default function AdminDashboard() {
   const me = useRequireRole('admin', '/admin-login');
   const [orgs, setOrgs] = useState(null);
+  const [plans, setPlans] = useState([]);
   const [query, setQuery] = useState('');
   const [newOrg, setNewOrg] = useState('');
   const [msg, setMsg] = useState(null);
@@ -14,7 +19,7 @@ export default function AdminDashboard() {
   const timer = useRef(null);
 
   const load = (q = query) => api('/api/orgs' + (q ? '?q=' + encodeURIComponent(q) : '')).then((d) => setOrgs(d.orgs));
-  useEffect(() => { if (me) load(''); }, [me]);
+  useEffect(() => { if (me) { load(''); api('/api/plans').then((d) => setPlans(d.plans)); } }, [me]);
 
   function onSearch(v) { setQuery(v); clearTimeout(timer.current); timer.current = setTimeout(() => load(v), 250); }
   async function createOrg() {
@@ -41,12 +46,31 @@ export default function AdminDashboard() {
           <input type="text" value={query} onChange={(e) => onSearch(e.target.value)} placeholder="🔍 Search organizations by name..." style={{ marginTop: 14 }} />
         </div>
 
+        {plans.length > 0 && (
+          <div className="card">
+            <h2>Pricing plans</h2>
+            <p className="muted">Priced by number of students. Assign a plan to each organization below.</p>
+            <table>
+              <thead><tr><th>Plan</th><th>Students</th><th>Price</th></tr></thead>
+              <tbody>
+                {plans.map((p) => (
+                  <tr key={p.id}>
+                    <td><b>{p.name}</b></td>
+                    <td>{p.max_students == null ? 'Unlimited' : `up to ${p.max_students}`}</td>
+                    <td>{fmtPrice(p)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
         {orgs === null ? (
           <div className="card"><p className="muted">Loading…</p></div>
         ) : orgs.length === 0 ? (
           <div className="card"><p className="muted">{query ? `No organizations match “${query}”.` : 'No organizations yet. Create one above.'}</p></div>
         ) : (
-          orgs.map((o) => <OrgCard key={o.id} org={o} onChanged={() => load(query)} onEditTeacher={setEditingTeacher} />)
+          orgs.map((o) => <OrgCard key={o.id} org={o} plans={plans} onChanged={() => load(query)} onEditTeacher={setEditingTeacher} />)
         )}
       </div>
 
@@ -56,7 +80,7 @@ export default function AdminDashboard() {
   );
 }
 
-function OrgCard({ org, onChanged, onEditTeacher }) {
+function OrgCard({ org, plans, onChanged, onEditTeacher }) {
   const [renaming, setRenaming] = useState(false);
   const [name, setName] = useState(org.name);
   const [form, setForm] = useState({ name: '', email: '', phone: '' });
@@ -66,6 +90,11 @@ function OrgCard({ org, onChanged, onEditTeacher }) {
     try { await api('/api/orgs/' + org.id, 'PUT', { name }); setRenaming(false); onChanged(); }
     catch (e) { setMsg({ ok: false, text: e.message }); }
   }
+  async function changePlan(planId) {
+    try { await api('/api/orgs/' + org.id + '/plan', 'PUT', { planId: Number(planId) }); onChanged(); }
+    catch (e) { setMsg({ ok: false, text: e.message }); }
+  }
+  const overLimit = org.maxStudents != null && org.studentCount > org.maxStudents;
   async function addRoot() {
     try {
       await api('/api/admin/root-teachers', 'POST', { orgId: org.id, ...form });
@@ -100,9 +129,20 @@ function OrgCard({ org, onChanged, onEditTeacher }) {
             <button className="btn ghost small" onClick={() => setRenaming(true)}>Rename</button>
           </div>
         )}
-        <span className="muted">{org.teacherCount} teacher(s) · {org.studentCount} student(s)</span>
+        <span className="muted">{org.teacherCount} teacher(s)</span>
       </div>
       {msg && <Msg text={msg.text} kind={msg.ok ? 'ok' : 'error'} />}
+
+      <div className="row" style={{ alignItems: 'center', gap: 10, marginTop: 10 }}>
+        <label style={{ margin: 0 }}>Plan:</label>
+        <select value={org.planId || ''} onChange={(e) => changePlan(e.target.value)} style={{ width: 'auto' }}>
+          {plans.map((p) => <option key={p.id} value={p.id}>{p.name} — {fmtPrice(p)} ({fmtCap(p)})</option>)}
+        </select>
+        <span className="muted">
+          {org.studentCount}{org.maxStudents != null ? ' / ' + org.maxStudents : ''} students used
+        </span>
+        {overLimit && <span className="pill amber">over limit — upgrade</span>}
+      </div>
 
       <h3 style={{ marginTop: 14 }}>Teachers</h3>
       {org.teachers.length === 0 ? <p className="muted">No teachers yet.</p> : (
