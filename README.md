@@ -2,8 +2,8 @@
 
 A simple website where **teachers create tests** and **students take them online**.
 
-Built with Node.js + Express and **PostgreSQL** (via the `pg` driver). Passwords
-are hashed with scrypt.
+Built with a **React** (Vite) frontend and a **Node.js + Express** API backed by
+**PostgreSQL** (via the `pg` driver). Passwords are hashed with scrypt.
 
 ## Features
 
@@ -19,12 +19,18 @@ are hashed with scrypt.
 Requires a running **PostgreSQL** server and a database named `testit`:
 
 ```bash
-createdb testit          # once
-npm install
-npm start
+createdb testit                 # once
+npm install                     # backend deps
+npm install --prefix client     # frontend deps (once)
+npm start                       # builds the React app + runs the server
 ```
 
-Then open **http://localhost:3000** in your browser.
+`npm start` builds the React frontend (`client/`) into `client/dist` and then
+starts the Express server, which serves that build. Open
+**http://localhost:3000** in your browser.
+
+For frontend development with hot-reload, run the Vite dev server separately
+(`npm run dev --prefix client`, on port 5173) — it proxies `/api` to Express.
 
 ### Database connection
 
@@ -58,8 +64,12 @@ once with `createdb testit_test`), so your real data is never touched.
 ## Project structure
 
 ```
-server.js      Express server + all API routes (async)
-db.js          Postgres connection pool, schema, and query helpers
-public/        Frontend (HTML/CSS/JS, no build step)
-run-tests.mjs  Test runner (spins up an isolated testit_test database)
+server.js       Express server + all API routes (async); serves the React build
+db.js           Postgres connection pool, schema, and query helpers
+client/         React + Vite frontend (src/pages, src/teacher, components, router)
+public/uploads/ Uploaded question images (served at /uploads)
+run-tests.mjs   Test runner (spins up an isolated testit_test database)
 ```
+
+`npm start` also adds a `build:client` step; the Express server serves
+`client/dist` and falls back to `index.html` for client-side routes.

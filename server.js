@@ -72,7 +72,7 @@ async function createResetToken(userId) {
 }
 
 function resetLink(req, token) {
-  return `${req.protocol}://${req.get('host')}/reset.html?token=${token}`;
+  return `${req.protocol}://${req.get('host')}/reset?token=${token}`;
 }
 
 async function sendResetEmail(to, link) {
@@ -288,7 +288,7 @@ app.post('/api/students', requireAuth('teacher'), h(async (req, res) => {
     'INSERT INTO signup_tokens (token, name, email, phone, access_until, org_id, teacher_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
     [token, name, email, phone, accessUntil, req.user.org_id, req.user.id]
   );
-  res.json({ token, signupPath: `/signup.html?token=${token}` });
+  res.json({ token, signupPath: `/signup?token=${token}` });
 }));
 
 // List this teacher's students + pending invites.
@@ -321,7 +321,7 @@ app.get('/api/students', requireAuth('teacher'), h(async (req, res) => {
     signedUp: !!i.used,
     studentId: i.student_id,
     disabled: !!i.disabled,
-    signupPath: i.used ? null : `/signup.html?token=${i.token}`,
+    signupPath: i.used ? null : `/signup?token=${i.token}`,
   }));
   res.json({ students });
 }));
@@ -400,7 +400,7 @@ app.post('/api/students/:id/reset-link', requireAuth('teacher'), h(async (req, r
   const owned = await get("SELECT 1 FROM users WHERE id = ? AND role = 'student' AND org_id = ?", [studentId, req.user.org_id]);
   if (!owned) return res.status(404).json({ error: 'Student not found.' });
   const token = await createResetToken(studentId);
-  res.json({ resetPath: `/reset.html?token=${token}` });
+  res.json({ resetPath: `/reset?token=${token}` });
 }));
 
 // ============================================================================
@@ -425,7 +425,7 @@ app.post('/api/teachers', requireRoot, h(async (req, res) => {
     "INSERT INTO signup_tokens (token, name, email, phone, invite_role, is_root, org_id, teacher_id) VALUES (?, ?, ?, ?, 'teacher', ?, ?, ?)",
     [token, name, email, phone, makeRoot, req.user.org_id, req.user.id]
   );
-  res.json({ token, signupPath: `/signup.html?token=${token}` });
+  res.json({ token, signupPath: `/signup?token=${token}` });
 }));
 
 // List teachers IN THE VIEWER'S ORGANIZATION. Any teacher can view the roster;
@@ -448,7 +448,7 @@ app.get('/api/teachers', requireAuth('teacher'), h(async (req, res) => {
     for (const p of pending) {
       teachers.push({
         id: null, name: p.name, email: p.email, phone: p.phone, isRoot: !!p.is_root, disabled: false,
-        signedUp: false, isSelf: false, signupPath: `/signup.html?token=${p.token}`,
+        signedUp: false, isSelf: false, signupPath: `/signup?token=${p.token}`,
       });
     }
   }
@@ -475,7 +475,7 @@ app.post('/api/teachers/:id/reset-link', requireRoot, h(async (req, res) => {
   const t = await get("SELECT id FROM users WHERE id = ? AND role = 'teacher' AND org_id = ?", [teacherId, req.user.org_id]);
   if (!t) return res.status(404).json({ error: 'Teacher not found.' });
   const token = await createResetToken(teacherId);
-  res.json({ resetPath: `/reset.html?token=${token}` });
+  res.json({ resetPath: `/reset?token=${token}` });
 }));
 
 // ============================================================================
@@ -507,7 +507,7 @@ app.get('/api/orgs', requireAdmin, h(async (req, res) => {
     const studentCount = (await get("SELECT COUNT(*) AS c FROM users WHERE role = 'student' AND org_id = ?", [o.id])).c;
     const teachers = [
       ...signedUp.map((u) => ({ id: u.id, name: u.name, email: u.email, phone: u.phone, isRoot: !!u.is_root, disabled: !!u.disabled, signedUp: true, signupPath: null })),
-      ...pending.map((p) => ({ id: null, name: p.name, email: p.email, phone: p.phone, isRoot: !!p.is_root, disabled: false, signedUp: false, signupPath: `/signup.html?token=${p.token}` })),
+      ...pending.map((p) => ({ id: null, name: p.name, email: p.email, phone: p.phone, isRoot: !!p.is_root, disabled: false, signedUp: false, signupPath: `/signup?token=${p.token}` })),
     ];
     result.push({ id: o.id, name: o.name, teachers, teacherCount: signedUp.length, studentCount });
   }
@@ -573,7 +573,7 @@ app.post('/api/admin/root-teachers', requireAdmin, h(async (req, res) => {
     "INSERT INTO signup_tokens (token, name, email, phone, invite_role, is_root, org_id, teacher_id) VALUES (?, ?, ?, ?, 'teacher', 1, ?, ?)",
     [token, name, email, phone, orgId, req.user.id]
   );
-  res.json({ token, signupPath: `/signup.html?token=${token}` });
+  res.json({ token, signupPath: `/signup?token=${token}` });
 }));
 
 // Validate a signup token (used by the signup page to pre-fill name/email).
@@ -1052,12 +1052,18 @@ app.post('/api/attempts/:attemptId/grade', requireAuth('teacher'), h(async (req,
   res.json({ ok: true });
 }));
 
-// --- Static files ------------------------------------------------------------
-// no-cache so the browser always revalidates and never shows a stale page.
-app.use(express.static(path.join(__dirname, 'public'), {
-  etag: true,
-  setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache'),
-}));
+// --- Static files (React build) ----------------------------------------------
+const CLIENT_DIST = path.join(__dirname, 'client', 'dist');
+// Uploaded question images.
+app.use('/uploads', express.static(UPLOAD_DIR));
+// The built React app (hashed assets are safe to cache).
+app.use(express.static(CLIENT_DIST));
+// SPA fallback: any non-API, non-uploads GET returns index.html so client-side
+// routing works on refresh/deep links.
+app.get(/^(?!\/api\/|\/uploads\/).*/, (req, res) => {
+  res.set('Cache-Control', 'no-cache');
+  res.sendFile(path.join(CLIENT_DIST, 'index.html'));
+});
 
 // JSON error handler (async route rejections land here).
 app.use((err, req, res, next) => {

@@ -2,11 +2,16 @@
 title Online Test Platform - server (keep this window open)
 cd /d "%~dp0"
 echo ================================================================
-echo   Starting the Online Test Platform...
+echo   Online Test Platform
+echo   Building the React frontend, then starting the server...
 echo   Once it says "running", open http://localhost:3000
 echo   Keep THIS window open. Close it to stop the server.
 echo ================================================================
 echo.
+echo Building frontend...
+call npm --prefix client run build
+echo.
+echo Starting server...
 where node >nul 2>nul
 if %errorlevel%==0 (
   node server.js

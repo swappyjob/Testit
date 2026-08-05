@@ -5,7 +5,9 @@
   "type": "module",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
+    "start": "npm run build:client && node server.js",
+    "build:client": "npm --prefix client run build",
+    "server": "node server.js",
     "test": "node run-tests.mjs"
   },
   "dependencies": {
