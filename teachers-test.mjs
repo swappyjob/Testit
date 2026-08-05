@@ -100,6 +100,34 @@ let r = await call(root, '/api/teachers', 'POST', { name: 'Dup', email: `nt${ran
 if (r.status !== 409) throw new Error('duplicate email should be 409');
 ok('duplicate email rejected');
 
+// --- Organization subscription (teacher-facing pricing) ---
+const sub = (await call(root, '/api/my-org/plan')).data;
+if (!Array.isArray(sub.plans) || sub.plans.length < 5) throw new Error('teacher should see all available plans');
+if (typeof sub.studentCount !== 'number') throw new Error('subscription should report student usage');
+ok('root teacher can view available plans and current usage');
+
+const freeP = sub.plans.find((p) => p.name === 'Free');
+const basicP = sub.plans.find((p) => p.name === 'Basic');
+
+// Root subscribes the org to Basic and it persists.
+if ((await call(root, '/api/my-org/plan', 'POST', { planId: basicP.id })).status !== 200)
+  throw new Error('root teacher should be able to subscribe to a plan');
+if ((await call(root, '/api/my-org/plan')).data.plan.name !== 'Basic') throw new Error('subscription did not persist');
+ok('root teacher can subscribe to a different plan');
+
+// Fill the org past the Free cap, then a downgrade to Free is blocked.
+for (let i = 0; i < 15; i++)
+  await call(root, '/api/students', 'POST', { name: 'F' + i, email: `f${i}_${rand}@x.com`, phone: '9000000009' });
+const badDown = await call(root, '/api/my-org/plan', 'POST', { planId: freeP.id }, false);
+if (badDown.status !== 400) throw new Error('downgrade below current usage should be blocked (400)');
+ok('cannot downgrade to a plan smaller than the current student count');
+
+// A normal teacher can view the plan but cannot change it.
+if ((await call(normal, '/api/my-org/plan')).status !== 200) throw new Error('normal teacher should view the plan');
+if ((await call(normal, '/api/my-org/plan', 'POST', { planId: basicP.id }, false)).status !== 403)
+  throw new Error('normal teacher changing the plan should be 403');
+ok('normal teacher can view but not change the subscription');
+
 // --- Disabling teachers (root only) ---
 const normalId = (await call(root, '/api/teachers')).data.teachers.find((t) => t.email === `nt${rand}@x.com`).id;
 

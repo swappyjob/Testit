@@ -6,6 +6,7 @@ import MyTests from '../teacher/MyTests.jsx';
 import TestBuilder from '../teacher/TestBuilder.jsx';
 import StudentsTab from '../teacher/StudentsTab.jsx';
 import TeachersTab from '../teacher/TeachersTab.jsx';
+import SubscriptionTab from '../teacher/SubscriptionTab.jsx';
 
 export default function TeacherDashboard() {
   const me = useRequireRole('teacher', '/teacher-login');
@@ -33,11 +34,13 @@ export default function TeacherDashboard() {
           <Tab id="create" label="Create Test" onClick={openCreate} />
           <Tab id="students" label="Students" />
           <Tab id="teachers" label="Teachers" />
+          <Tab id="subscription" label="Subscription" />
         </div>
         {tab === 'tests' && <MyTests onEdit={openEdit} />}
         {tab === 'create' && <TestBuilder key={editTestId || 'new'} editId={editTestId} onSaved={afterSave} onCancel={() => { setEditTestId(null); setTab('tests'); }} />}
         {tab === 'students' && <StudentsTab />}
         {tab === 'teachers' && <TeachersTab />}
+        {tab === 'subscription' && <SubscriptionTab isRoot={me.isRoot} />}
       </div>
       {showProfile && <ProfileModal me={me} onClose={() => setShowProfile(false)} />}
     </>

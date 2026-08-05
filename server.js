@@ -519,6 +519,33 @@ app.put('/api/orgs/:id/plan', requireAdmin, h(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// A teacher views their own organization's current plan, usage, and all plans.
+app.get('/api/my-org/plan', requireAuth('teacher'), h(async (req, res) => {
+  const plan = await get(
+    'SELECT p.id, p.name, p.max_students, p.price_monthly FROM organizations o LEFT JOIN plans p ON p.id = o.plan_id WHERE o.id = ?',
+    [req.user.org_id]
+  );
+  const studentCount = (await get(
+    "SELECT COUNT(*) AS c FROM signup_tokens WHERE invite_role = 'student' AND org_id = ?", [req.user.org_id]
+  )).c;
+  const plans = await all('SELECT id, name, max_students, price_monthly FROM plans ORDER BY sort_order');
+  res.json({ plan: plan && plan.id ? plan : null, studentCount, plans });
+}));
+
+// A root teacher subscribes their organization to a different plan (self-service).
+app.post('/api/my-org/plan', requireRoot, h(async (req, res) => {
+  const planId = Number(req.body.planId);
+  const plan = await get('SELECT id, name, max_students FROM plans WHERE id = ?', [planId]);
+  if (!plan) return res.status(400).json({ error: 'Invalid plan.' });
+  const studentCount = (await get(
+    "SELECT COUNT(*) AS c FROM signup_tokens WHERE invite_role = 'student' AND org_id = ?", [req.user.org_id]
+  )).c;
+  if (plan.max_students != null && studentCount > plan.max_students)
+    return res.status(400).json({ error: `Your organization has ${studentCount} students, but the ${plan.name} plan supports up to ${plan.max_students}. Remove students or choose a larger plan.` });
+  await run('UPDATE organizations SET plan_id = ? WHERE id = ?', [planId, req.user.org_id]);
+  res.json({ ok: true });
+}));
+
 // List organizations with their teachers (signed up + pending) and counts.
 // Optional ?q= filters by organization name (case-insensitive).
 app.get('/api/orgs', requireAdmin, h(async (req, res) => {
