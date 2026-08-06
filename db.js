@@ -8,14 +8,24 @@ const { Pool } = pg;
 // Return integer/bigint counts as JS numbers instead of strings.
 pg.types.setTypeParser(20, (v) => (v === null ? null : parseInt(v, 10))); // int8/bigint
 
-const pool = new Pool({
-  host: process.env.PGHOST || 'localhost',
-  port: Number(process.env.PGPORT || 5432),
-  user: process.env.PGUSER || 'postgres',
-  password: process.env.PGPASSWORD || 'postgres',
-  database: process.env.PGDATABASE || 'testit',
-  max: 10,
-});
+// In production (Render/Railway/Fly/Cloud SQL/Neon/Supabase, etc.) the host
+// hands you a single DATABASE_URL. Locally we fall back to the individual PG*
+// vars. Managed Postgres almost always requires SSL; set PGSSLMODE=disable to
+// turn it off (e.g. a self-hosted DB on a private network).
+const pool = process.env.DATABASE_URL
+  ? new Pool({
+      connectionString: process.env.DATABASE_URL,
+      ssl: process.env.PGSSLMODE === 'disable' ? false : { rejectUnauthorized: false },
+      max: Number(process.env.PGPOOL_MAX || 10),
+    })
+  : new Pool({
+      host: process.env.PGHOST || 'localhost',
+      port: Number(process.env.PGPORT || 5432),
+      user: process.env.PGUSER || 'postgres',
+      password: process.env.PGPASSWORD || 'postgres',
+      database: process.env.PGDATABASE || 'testit',
+      max: Number(process.env.PGPOOL_MAX || 10),
+    });
 
 // Without this handler, an idle client dropped by Postgres would crash the
 // whole process. Log it and let the pool recover on the next query.

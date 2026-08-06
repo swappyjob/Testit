@@ -1,0 +1,22 @@
+# Dependencies (reinstalled inside the image)
+node_modules
+client/node_modules
+
+# Local client build (rebuilt in the image)
+client/dist
+
+# Local dev / secrets / data — never bake these into the image
+.env
+.git
+.gitignore
+*.log
+npm-debug.log*
+data.db
+data.db-journal
+public/uploads
+
+# Editor / OS cruft
+.vscode
+.idea
+.DS_Store
+Thumbs.db

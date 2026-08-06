@@ -10,12 +10,19 @@ import { get, all, run, tx, init } from './db.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 3000;
+const PROD = process.env.NODE_ENV === 'production';
+
+// Behind a hosting platform's load balancer / reverse proxy (Render, a VPS
+// nginx, Cloud Run, ...), trust the X-Forwarded-* headers so req.protocol is
+// 'https' and Secure cookies are sent correctly.
+if (PROD) app.set('trust proxy', 1);
 
 // Larger limit so base64-encoded question images fit in the JSON body.
 app.use(express.json({ limit: '8mb' }));
 
-// Folder where uploaded question images are stored and served from.
-const UPLOAD_DIR = path.join(__dirname, 'public', 'uploads');
+// Folder where uploaded question images are stored and served from. In
+// production point UPLOAD_DIR at a persistent disk so images survive redeploys.
+const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, 'public', 'uploads');
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 // Wrap an async route handler so rejected promises become Express errors.
@@ -146,7 +153,7 @@ function requireAdmin(req, res, next) {
 async function startSession(res, userId) {
   const token = randomToken();
   await run('INSERT INTO sessions (token, user_id) VALUES (?, ?)', [token, userId]);
-  res.cookie('sid', token, { httpOnly: true, sameSite: 'lax', maxAge: 1000 * 60 * 60 * 24 * 7 });
+  res.cookie('sid', token, { httpOnly: true, sameSite: 'lax', secure: PROD, maxAge: 1000 * 60 * 60 * 24 * 7 });
 }
 
 const publicUser = (u) => ({ id: u.id, role: u.role, name: u.name, email: u.email, isRoot: !!u.is_root, orgId: u.org_id, orgName: u.org_name || null });
@@ -1135,7 +1142,23 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Something went wrong on the server.' });
 });
 
+// On first boot in a fresh environment, create the platform admin from
+// ADMIN_EMAIL / ADMIN_PASSWORD (and optional ADMIN_NAME). Idempotent: if an
+// account with that email already exists, it is left untouched — so a redeploy
+// never resets the password. Change the password in-app afterwards.
+async function seedAdminFromEnv() {
+  const email = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
+  const password = process.env.ADMIN_PASSWORD || '';
+  if (!email || !password) return;
+  if (await get('SELECT id FROM users WHERE email = ?', [email])) return;
+  await run('INSERT INTO users (role, name, email, password_hash) VALUES (?, ?, ?, ?)', [
+    'admin', (process.env.ADMIN_NAME || 'Administrator').trim(), email, hashPassword(password),
+  ]);
+  console.log('Seeded platform admin from environment:', email);
+}
+
 await init();
+await seedAdminFromEnv();
 app.listen(PORT, () => {
   console.log(`\n  Online Test Platform running at:  http://localhost:${PORT}\n`);
 });

@@ -1,0 +1,55 @@
+# Render Blueprint — provisions everything in one click from this repo.
+# In Render: New + > Blueprint > pick this repo. Fill the "sync: false" secrets
+# when prompted (they are never stored in git).
+#
+# If a plan slug below is rejected, just pick an equivalent plan in the Render
+# UI — the rest of the blueprint still applies.
+
+services:
+  - type: web
+    name: testit
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter                 # paid instance; required for a persistent disk
+    healthCheckPath: /api/me      # returns 200 (JSON) even when logged out
+    autoDeploy: true              # redeploy on every push to the tracked branch
+    disk:
+      name: uploads
+      mountPath: /data            # UPLOAD_DIR points here so images survive redeploys
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: UPLOAD_DIR
+        value: /data/uploads
+      - key: DATABASE_URL
+        fromDatabase:
+          name: testit-db
+          property: connectionString
+      # First-boot admin (idempotent — set these before the first deploy).
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: ADMIN_NAME
+        sync: false
+      # Optional: SMTP for "forgot password" emails. Leave unset to log links
+      # to the server console instead (admin-generated reset links still work).
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        sync: false
+      - key: SMTP_SECURE
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: SMTP_FROM
+        sync: false
+
+databases:
+  - name: testit-db
+    plan: basic-256mb             # smallest paid Postgres; upgrade anytime
+    databaseName: testit
+    user: testit
