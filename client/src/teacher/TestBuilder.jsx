@@ -24,7 +24,7 @@ export default function TestBuilder({ editId, onSaved, onCancel }) {
   const [durationMinutes, setDurationMinutes] = useState('');
   const [negativeMarking, setNegativeMarking] = useState(false);
   const [penalty, setPenalty] = useState(1);
-  const [questions, setQuestions] = useState([blankQuestion('mcq')]);
+  const [questions, setQuestions] = useState([blankQuestion('multi')]);
   const [msg, setMsg] = useState('');
 
   useEffect(() => {
@@ -209,7 +209,6 @@ export default function TestBuilder({ editId, onSaved, onCancel }) {
       ))}
 
       <div className="row">
-        <button className="btn secondary small" onClick={() => addQ('mcq')}>+ Multiple choice</button>
         <button className="btn secondary small" onClick={() => addQ('multi')}>+ Multiple answers</button>
         <button className="btn secondary small" onClick={() => addQ('truefalse')}>+ True / False</button>
         <button className="btn secondary small" onClick={() => addQ('short')}>+ Short answer</button>
