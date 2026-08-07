@@ -5,12 +5,17 @@ import { Msg } from '../components.jsx';
 const blankQuestion = (type) => ({
   type,
   prompt: '',
-  options: type === 'mcq' ? ['', '', '', ''] : [],
-  correct: type === 'mcq' ? 0 : type === 'truefalse' ? 'true' : '',
+  options: type === 'mcq' || type === 'multi' ? ['', '', '', ''] : [],
+  correct: type === 'mcq' ? 0 : type === 'multi' ? [] : type === 'truefalse' ? 'true' : '',
   points: 1,
   image: '',
 });
-const TYPE_LABEL = { mcq: 'Multiple choice', truefalse: 'True / False', short: 'Short answer' };
+const TYPE_LABEL = { mcq: 'Multiple choice', multi: 'Multiple answers', truefalse: 'True / False', short: 'Short answer' };
+
+// Parse a stored multi-answer key ("[0,2]") into an array of numbers.
+const parseCorrectSet = (raw) => {
+  try { const a = JSON.parse(raw); return Array.isArray(a) ? a.map(Number) : []; } catch { return []; }
+};
 
 export default function TestBuilder({ editId, onSaved, onCancel }) {
   const [title, setTitle] = useState('');
@@ -34,8 +39,10 @@ export default function TestBuilder({ editId, onSaved, onCancel }) {
       setQuestions(questions.map((q) => ({
         type: q.type,
         prompt: q.prompt,
-        options: q.type === 'mcq' ? q.options : [],
-        correct: q.type === 'mcq' ? Number(q.correct_answer) : q.type === 'truefalse' ? q.correct_answer : '',
+        options: q.type === 'mcq' || q.type === 'multi' ? q.options : [],
+        correct: q.type === 'mcq' ? Number(q.correct_answer)
+          : q.type === 'multi' ? parseCorrectSet(q.correct_answer)
+          : q.type === 'truefalse' ? q.correct_answer : '',
         points: q.points,
         image: q.image_url || '',
       })));
@@ -64,13 +71,23 @@ export default function TestBuilder({ editId, onSaved, onCancel }) {
 
   async function save() {
     setMsg('');
-    // For MCQ, drop blank choices and remap the correct index to the kept list.
+    // For MCQ/multi, drop blank choices and remap the correct index/indices to
+    // the kept list (indices must line up with the options actually stored).
     const clean = questions.map((q) => {
-      if (q.type !== 'mcq') return q;
-      const kept = [];
-      let correct = -1;
-      q.options.forEach((v, idx) => { if (v.trim() !== '') { if (idx === Number(q.correct)) correct = kept.length; kept.push(v); } });
-      return { ...q, options: kept, correct };
+      if (q.type === 'mcq') {
+        const kept = [];
+        let correct = -1;
+        q.options.forEach((v, idx) => { if (v.trim() !== '') { if (idx === Number(q.correct)) correct = kept.length; kept.push(v); } });
+        return { ...q, options: kept, correct };
+      }
+      if (q.type === 'multi') {
+        const kept = [];
+        const correct = [];
+        const chosen = new Set((q.correct || []).map(Number));
+        q.options.forEach((v, idx) => { if (v.trim() !== '') { if (chosen.has(idx)) correct.push(kept.length); kept.push(v); } });
+        return { ...q, options: kept, correct };
+      }
+      return q;
     });
     const payload = {
       title, description, dueDate,
@@ -116,7 +133,7 @@ export default function TestBuilder({ editId, onSaved, onCancel }) {
             <label>Marks deducted per wrong answer</label>
             <input type="number" min="1" step="1" value={penalty} onChange={(e) => setPenalty(Number(e.target.value) || 1)} style={{ width: 120 }} />
             <p className="muted" style={{ fontSize: 13, margin: '6px 0 0' }}>
-              Applies to multiple-choice &amp; true/false only. Blank answers are never penalized. A student's total can go negative.
+              Applies to multiple-choice, multiple-answer &amp; true/false questions. Blank answers are never penalized. A student's total can go negative.
             </p>
           </div>
         )}
@@ -154,6 +171,26 @@ export default function TestBuilder({ editId, onSaved, onCancel }) {
               <button className="btn ghost small" style={{ marginTop: 6 }} onClick={() => addOption(i)}>+ Add choice</button>
             </>
           )}
+          {q.type === 'multi' && (
+            <>
+              <label>Choices (tick every correct answer)</label>
+              {q.options.map((opt, oi) => {
+                const chosen = Array.isArray(q.correct) && q.correct.map(Number).includes(oi);
+                return (
+                  <div className="row" key={oi} style={{ marginBottom: 6 }}>
+                    <input type="checkbox" checked={chosen} onChange={() => {
+                      const cur = new Set((q.correct || []).map(Number));
+                      if (cur.has(oi)) cur.delete(oi); else cur.add(oi);
+                      updateQ(i, { correct: [...cur].sort((a, b) => a - b) });
+                    }} style={{ width: 'auto' }} />
+                    <input type="text" value={opt} onChange={(e) => setOption(i, oi, e.target.value)} placeholder={'Choice ' + (oi + 1)} style={{ flex: 1 }} />
+                  </div>
+                );
+              })}
+              <button className="btn ghost small" style={{ marginTop: 6 }} onClick={() => addOption(i)}>+ Add choice</button>
+              <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>Students see checkboxes and may pick more than one. Full marks only if they select exactly the ticked answers.</p>
+            </>
+          )}
           {q.type === 'truefalse' && (
             <>
               <label>Correct answer</label>
@@ -173,6 +210,7 @@ export default function TestBuilder({ editId, onSaved, onCancel }) {
 
       <div className="row">
         <button className="btn secondary small" onClick={() => addQ('mcq')}>+ Multiple choice</button>
+        <button className="btn secondary small" onClick={() => addQ('multi')}>+ Multiple answers</button>
         <button className="btn secondary small" onClick={() => addQ('truefalse')}>+ True / False</button>
         <button className="btn secondary small" onClick={() => addQ('short')}>+ Short answer</button>
       </div>

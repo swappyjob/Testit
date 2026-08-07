@@ -43,6 +43,14 @@ export default function TakeTest() {
 
   function setAnswer(qid, value) { setAnswers((a) => ({ ...a, [qid]: value })); }
 
+  // Multi-answer selections are stored as a JSON array string, e.g. "[0,2]".
+  const parseSel = (v) => { try { const a = JSON.parse(v); return Array.isArray(a) ? a.map(Number) : []; } catch { return []; } };
+  function toggleMulti(qid, idx) {
+    const s = new Set(parseSel(answers[qid]));
+    if (s.has(idx)) s.delete(idx); else s.add(idx);
+    setAnswer(qid, JSON.stringify([...s].sort((a, b) => a - b)));
+  }
+
   async function doSubmit(auto) {
     if (submitting.current) return;
     if (!auto && !window.confirm('Submit your test? You cannot change answers after this.')) return;
@@ -104,7 +112,7 @@ export default function TakeTest() {
           </p>
           {test.negative_marking ? (
             <div className="msg" style={{ background: '#fef3c7', color: '#92400e' }}>
-              ⚠️ Negative marking is ON: {test.penalty} mark(s) will be deducted for each wrong multiple-choice / true-false answer. Leaving a question blank costs nothing.
+              ⚠️ Negative marking is ON: {test.penalty} mark(s) will be deducted for each wrong multiple-choice, multiple-answer or true/false answer. Leaving a question blank costs nothing.
             </div>
           ) : null}
           {timed && (
@@ -122,6 +130,16 @@ export default function TakeTest() {
               <input type="radio" name={'q' + q.id} checked={answers[q.id] === String(idx)} onChange={() => setAnswer(q.id, String(idx))} /> {opt}
             </label>
           ))}
+          {q.type === 'multi' && (
+            <>
+              <p className="muted" style={{ margin: '0 0 8px' }}>Select all that apply.</p>
+              {q.options.map((opt, idx) => (
+                <label className="choice" key={idx}>
+                  <input type="checkbox" checked={parseSel(answers[q.id]).includes(idx)} onChange={() => toggleMulti(q.id, idx)} /> {opt}
+                </label>
+              ))}
+            </>
+          )}
           {q.type === 'truefalse' && ['true', 'false'].map((v) => (
             <label className="choice" key={v}>
               <input type="radio" name={'q' + q.id} checked={answers[q.id] === v} onChange={() => setAnswer(q.id, v)} /> {v === 'true' ? 'True' : 'False'}

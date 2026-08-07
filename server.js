@@ -682,13 +682,20 @@ function validateQuestions(questions) {
   if (questions.length === 0) return 'Add at least one question.';
   for (const [i, q] of questions.entries()) {
     if (!q.prompt || !q.prompt.trim()) return `Question ${i + 1} is missing its text.`;
-    if (!['mcq', 'truefalse', 'short'].includes(q.type)) return `Question ${i + 1} has an invalid type.`;
+    if (!['mcq', 'truefalse', 'short', 'multi'].includes(q.type)) return `Question ${i + 1} has an invalid type.`;
     if (q.type === 'mcq') {
       const opts = Array.isArray(q.options) ? q.options.filter((o) => o.trim() !== '') : [];
       if (opts.length < 2) return `Question ${i + 1} needs at least two choices.`;
       const ci = Number(q.correct);
       if (!Number.isInteger(ci) || ci < 0 || ci >= opts.length)
         return `Question ${i + 1} needs a correct choice selected.`;
+    }
+    if (q.type === 'multi') {
+      const opts = Array.isArray(q.options) ? q.options.filter((o) => o.trim() !== '') : [];
+      if (opts.length < 2) return `Question ${i + 1} needs at least two choices.`;
+      const correct = Array.isArray(q.correct) ? q.correct.map(Number) : [];
+      const valid = correct.filter((ci) => Number.isInteger(ci) && ci >= 0 && ci < opts.length);
+      if (valid.length < 1) return `Question ${i + 1} needs at least one correct choice selected.`;
     }
     if (q.type === 'truefalse' && !['true', 'false'].includes(String(q.correct)))
       return `Question ${i + 1} needs a correct answer (True/False).`;
@@ -701,6 +708,15 @@ function safeImageUrl(url) {
   return typeof url === 'string' && /^\/uploads\/[\w.-]+$/.test(url) ? url : '';
 }
 
+// Parse a JSON array of option indices into a clean, sorted, de-duplicated set.
+// Used for multi-answer questions (both the stored key and the student response).
+function parseIndexSet(str) {
+  let arr = [];
+  try { arr = JSON.parse(str); } catch { /* not JSON */ }
+  if (!Array.isArray(arr)) return [];
+  return [...new Set(arr.map(Number))].filter((n) => Number.isInteger(n) && n >= 0).sort((a, b) => a - b);
+}
+
 // Insert the given questions for a test using the provided (transactional) run.
 async function writeQuestions(runFn, testId, questions) {
   for (const [idx, q] of questions.entries()) {
@@ -709,6 +725,13 @@ async function writeQuestions(runFn, testId, questions) {
     if (q.type === 'mcq') {
       options = JSON.stringify(q.options.filter((o) => o.trim() !== ''));
       correct = String(q.correct);
+    } else if (q.type === 'multi') {
+      const opts = q.options.filter((o) => o.trim() !== '');
+      options = JSON.stringify(opts);
+      const set = [...new Set((Array.isArray(q.correct) ? q.correct : []).map(Number))]
+        .filter((ci) => Number.isInteger(ci) && ci >= 0 && ci < opts.length)
+        .sort((a, b) => a - b);
+      correct = JSON.stringify(set); // e.g. "[0,2]"
     } else if (q.type === 'truefalse') {
       correct = String(q.correct);
     }
@@ -976,6 +999,17 @@ app.post('/api/submit/:assignmentId', requireAuth('student'), h(async (req, res)
     if (q.type === 'mcq' || q.type === 'truefalse') {
       const answered = resp !== '';
       isCorrect = answered && resp === q.correct_answer ? 1 : 0;
+      if (isCorrect) awarded = q.points;
+      else if (answered && test.negative_marking) awarded = -test.penalty;
+      autoScore += awarded;
+    } else if (q.type === 'multi') {
+      // Response and stored answer are both JSON arrays of option indices.
+      // All-or-nothing: full marks only when the chosen set exactly matches.
+      const chosen = parseIndexSet(resp);
+      const answered = chosen.length > 0;
+      const key = parseIndexSet(q.correct_answer);
+      const exact = answered && chosen.length === key.length && chosen.every((v, k) => v === key[k]);
+      isCorrect = exact ? 1 : 0;
       if (isCorrect) awarded = q.points;
       else if (answered && test.negative_marking) awarded = -test.penalty;
       autoScore += awarded;

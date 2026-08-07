@@ -128,7 +128,7 @@ async function init() {
     CREATE TABLE IF NOT EXISTS questions (
       id             SERIAL PRIMARY KEY,
       test_id        INTEGER NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
-      type           TEXT NOT NULL CHECK (type IN ('mcq', 'truefalse', 'short')),
+      type           TEXT NOT NULL CHECK (type IN ('mcq', 'truefalse', 'short', 'multi')),
       prompt         TEXT NOT NULL,
       options_json   TEXT NOT NULL DEFAULT '[]',
       correct_answer TEXT NOT NULL DEFAULT '',
@@ -202,6 +202,9 @@ async function init() {
   // Allow the new 'admin' role on databases created before it existed.
   await pool.query('ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check');
   await pool.query("ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('admin', 'teacher', 'student'))");
+  // Allow the new 'multi' (multiple correct answers) question type on older DBs.
+  await pool.query('ALTER TABLE questions DROP CONSTRAINT IF EXISTS questions_type_check');
+  await pool.query("ALTER TABLE questions ADD CONSTRAINT questions_type_check CHECK (type IN ('mcq', 'truefalse', 'short', 'multi'))");
 
   // Pricing plans: organizations reference a plan.
   await pool.query('ALTER TABLE organizations ADD COLUMN IF NOT EXISTS plan_id INTEGER REFERENCES plans(id)');

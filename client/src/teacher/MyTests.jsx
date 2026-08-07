@@ -174,6 +174,20 @@ function AttemptPanel({ test, attemptId, onBack }) {
               <span className="muted">Correct answer: {it.options[Number(it.correctAnswer)] ?? it.correctAnswer}</span>
             </div>
           )}
+          {it.type === 'multi' && (() => {
+            const fmt = (raw) => {
+              let a = []; try { a = JSON.parse(raw); } catch { /* ignore */ }
+              if (!Array.isArray(a) || a.length === 0) return '—';
+              return a.map((idx) => it.options[Number(idx)] ?? idx).join(', ');
+            };
+            return (
+              <div>
+                Answered: <b>{fmt(it.response)}</b>{' '}
+                {it.isCorrect ? <span className="pill green">correct</span> : <span className="pill gray">wrong</span>}<br />
+                <span className="muted">Correct answers: {fmt(it.correctAnswer)}</span>
+              </div>
+            );
+          })()}
           {it.type === 'truefalse' && (
             <div>
               Answered: <b>{it.response === '' ? '—' : it.response}</b>{' '}
