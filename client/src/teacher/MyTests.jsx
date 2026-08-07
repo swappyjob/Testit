@@ -176,8 +176,11 @@ function AttemptPanel({ test, attemptId, onBack }) {
           )}
           {it.type === 'multi' && (() => {
             const fmt = (raw) => {
-              let a = []; try { a = JSON.parse(raw); } catch { /* ignore */ }
-              if (!Array.isArray(a) || a.length === 0) return '—';
+              if (raw === '' || raw == null) return '—';
+              let a; try { a = JSON.parse(raw); } catch { a = raw; }
+              if (!Array.isArray(a)) a = [Number(a)]; // tolerate legacy single-index like "2"
+              a = a.filter((n) => Number.isFinite(Number(n)));
+              if (a.length === 0) return '—';
               return a.map((idx) => it.options[Number(idx)] ?? idx).join(', ');
             };
             return (

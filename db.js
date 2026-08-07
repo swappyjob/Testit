@@ -205,6 +205,10 @@ async function init() {
   // Allow the new 'multi' (multiple correct answers) question type on older DBs.
   await pool.query('ALTER TABLE questions DROP CONSTRAINT IF EXISTS questions_type_check');
   await pool.query("ALTER TABLE questions ADD CONSTRAINT questions_type_check CHECK (type IN ('mcq', 'truefalse', 'short', 'multi'))");
+  // Convert legacy single-answer MCQs into checkbox (multi) questions so students
+  // see checkboxes everywhere. A single index like "2" becomes the set "[2]".
+  // Idempotent: once converted the rows are 'multi' and won't match again.
+  await pool.query("UPDATE questions SET type = 'multi', correct_answer = '[' || correct_answer || ']' WHERE type = 'mcq' AND correct_answer ~ '^[0-9]+$'");
 
   // Pricing plans: organizations reference a plan.
   await pool.query('ALTER TABLE organizations ADD COLUMN IF NOT EXISTS plan_id INTEGER REFERENCES plans(id)');
