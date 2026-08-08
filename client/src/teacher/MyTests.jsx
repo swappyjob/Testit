@@ -165,6 +165,7 @@ function AttemptPanel({ test, attemptId, onBack }) {
       <Msg text={msg} kind="ok" />
       {items.map((it, i) => (
         <div className="q-card" key={it.answerId}>
+          {it.section && <div className="pill brand" style={{ marginBottom: 8 }}>{it.section}</div>}
           <h3>Q{i + 1}. {it.prompt} <span className="muted">({it.points} pt)</span></h3>
           {it.image && <img src={it.image} alt="" style={{ maxWidth: 280, maxHeight: 200, border: '1px solid var(--line)', borderRadius: 8, display: 'block', marginBottom: 10 }} />}
           {it.type === 'mcq' && (

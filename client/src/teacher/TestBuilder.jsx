@@ -9,6 +9,7 @@ const blankQuestion = (type) => ({
   correct: type === 'mcq' ? 0 : type === 'multi' ? [] : type === 'truefalse' ? 'true' : '',
   points: 1,
   image: '',
+  section: '',
 });
 const TYPE_LABEL = { mcq: 'Multiple choice', multi: 'Multiple answers', truefalse: 'True / False', short: 'Short answer' };
 
@@ -24,6 +25,8 @@ export default function TestBuilder({ editId, onSaved, onCancel }) {
   const [durationMinutes, setDurationMinutes] = useState('');
   const [negativeMarking, setNegativeMarking] = useState(false);
   const [penalty, setPenalty] = useState(1);
+  const [sections, setSections] = useState([]); // e.g. ['Quantitative Aptitude', 'Physics']
+  const [newSection, setNewSection] = useState('');
   const [questions, setQuestions] = useState([blankQuestion('multi')]);
   const [msg, setMsg] = useState('');
 
@@ -36,7 +39,7 @@ export default function TestBuilder({ editId, onSaved, onCancel }) {
       setDurationMinutes(test.duration_minutes || '');
       setNegativeMarking(!!test.negative_marking);
       setPenalty(test.penalty > 0 ? test.penalty : 1);
-      setQuestions(questions.map((q) => ({
+      const qs = questions.map((q) => ({
         type: q.type,
         prompt: q.prompt,
         options: q.type === 'mcq' || q.type === 'multi' ? q.options : [],
@@ -45,7 +48,13 @@ export default function TestBuilder({ editId, onSaved, onCancel }) {
           : q.type === 'truefalse' ? q.correct_answer : '',
         points: q.points,
         image: q.image_url || '',
-      })));
+        section: q.section || '',
+      }));
+      setQuestions(qs);
+      // Rebuild the section list from whatever sections the questions use (in order of first appearance).
+      const seen = [];
+      qs.forEach((q) => { if (q.section && !seen.includes(q.section)) seen.push(q.section); });
+      setSections(seen);
     });
   }, [editId]);
 
@@ -54,6 +63,18 @@ export default function TestBuilder({ editId, onSaved, onCancel }) {
   const addQ = (type) => setQuestions((qs) => [...qs, blankQuestion(type)]);
   const setOption = (qi, oi, val) => updateQ(qi, { options: questions[qi].options.map((o, idx) => (idx === oi ? val : o)) });
   const addOption = (qi) => updateQ(qi, { options: [...questions[qi].options, ''] });
+
+  function addSection() {
+    const name = newSection.trim();
+    if (!name) return;
+    if (!sections.includes(name)) setSections((s) => [...s, name]);
+    setNewSection('');
+  }
+  function removeSection(name) {
+    setSections((s) => s.filter((x) => x !== name));
+    // Un-assign this section from any question that used it.
+    setQuestions((qs) => qs.map((q) => (q.section === name ? { ...q, section: '' } : q)));
+  }
 
   async function uploadImage(qi, file) {
     if (!file) return;
@@ -139,6 +160,30 @@ export default function TestBuilder({ editId, onSaved, onCancel }) {
         )}
       </div>
 
+      <div className="q-card" style={{ marginTop: 16 }}>
+        <label style={{ fontWeight: 600 }}>Sections (optional)</label>
+        <p className="muted" style={{ fontSize: 13, margin: '2px 0 8px' }}>
+          Group questions into sections like Quantitative Aptitude, Physics or Chemistry, then pick a section for each question below.
+        </p>
+        <div className="row" style={{ gap: 8 }}>
+          <input type="text" value={newSection} onChange={(e) => setNewSection(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addSection(); } }}
+            placeholder="e.g. Quantitative Aptitude" style={{ flex: 1 }} />
+          <button className="btn secondary small" type="button" onClick={addSection}>+ Add section</button>
+        </div>
+        {sections.length > 0 && (
+          <div className="row" style={{ gap: 6, flexWrap: 'wrap', marginTop: 10 }}>
+            {sections.map((s) => (
+              <span key={s} className="pill brand" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                {s}
+                <button type="button" onClick={() => removeSection(s)}
+                  title="Remove section" style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', fontWeight: 700, lineHeight: 1 }}>×</button>
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
       <h2 style={{ marginTop: 22 }}>Questions</h2>
       {questions.map((q, i) => (
         <div className="q-card" key={i}>
@@ -146,6 +191,15 @@ export default function TestBuilder({ editId, onSaved, onCancel }) {
             <span className="pill brand">{TYPE_LABEL[q.type]}</span>
             <button className="btn danger small" onClick={() => removeQ(i)}>Remove</button>
           </div>
+          {sections.length > 0 && (
+            <>
+              <label>Section</label>
+              <select value={q.section || ''} onChange={(e) => updateQ(i, { section: e.target.value })} style={{ width: 'auto' }}>
+                <option value="">— No section —</option>
+                {sections.map((s) => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </>
+          )}
           <label>Question text</label>
           <textarea value={q.prompt} onChange={(e) => updateQ(i, { prompt: e.target.value })} placeholder="Type the question..." />
 

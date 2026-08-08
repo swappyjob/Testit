@@ -123,6 +123,7 @@ export default function TakeTest() {
         </div>
 
         <div className="q-card">
+          {q.section && <div className="pill brand" style={{ marginBottom: 8 }}>{q.section}</div>}
           <h3>Q{current + 1}. {q.prompt} <span className="muted">({q.points} pt)</span></h3>
           {q.image && <img src={q.image} alt="" style={{ maxWidth: '100%', maxHeight: 260, border: '1px solid var(--line)', borderRadius: 8, display: 'block', marginBottom: 10 }} />}
           {q.type === 'mcq' && q.options.map((opt, idx) => (

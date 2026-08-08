@@ -736,10 +736,11 @@ async function writeQuestions(runFn, testId, questions) {
       correct = String(q.correct);
     }
     const points = Number(q.points) > 0 ? Number(q.points) : 1;
+    const section = typeof q.section === 'string' ? q.section.trim().slice(0, 100) : '';
     await runFn(
-      `INSERT INTO questions (test_id, type, prompt, options_json, correct_answer, image_url, points, position)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [testId, q.type, q.prompt.trim(), options, correct, safeImageUrl(q.image), points, idx]
+      `INSERT INTO questions (test_id, type, prompt, options_json, correct_answer, image_url, points, position, section)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [testId, q.type, q.prompt.trim(), options, correct, safeImageUrl(q.image), points, idx, section]
     );
   }
 }
@@ -967,9 +968,9 @@ app.get('/api/take/:assignmentId', requireAuth('student'), h(async (req, res) =>
   }
 
   const questions = (await all(
-    'SELECT id, type, prompt, options_json, image_url, points FROM questions WHERE test_id = ? AND archived = 0 ORDER BY position',
+    'SELECT id, type, prompt, options_json, image_url, points, section FROM questions WHERE test_id = ? AND archived = 0 ORDER BY position',
     [a.test_id]
-  )).map((q) => ({ id: q.id, type: q.type, prompt: q.prompt, points: q.points, image: q.image_url, options: JSON.parse(q.options_json) }));
+  )).map((q) => ({ id: q.id, type: q.type, prompt: q.prompt, points: q.points, image: q.image_url, section: q.section, options: JSON.parse(q.options_json) }));
   res.json({ test, questions, durationMinutes: test.duration_minutes, remainingSeconds });
 }));
 
@@ -1084,7 +1085,7 @@ app.get('/api/attempts/:attemptId', requireAuth('teacher'), h(async (req, res) =
   if (!attempt) return res.status(404).json({ error: 'Attempt not found.' });
   const items = (await all(
     `SELECT ans.id AS answer_id, ans.response, ans.is_correct, ans.points_awarded,
-            q.id AS question_id, q.type, q.prompt, q.options_json, q.correct_answer, q.image_url, q.points
+            q.id AS question_id, q.type, q.prompt, q.options_json, q.correct_answer, q.image_url, q.points, q.section
        FROM answers ans JOIN questions q ON q.id = ans.question_id
       WHERE ans.attempt_id = ? ORDER BY q.position`,
     [attempt.id]
@@ -1096,6 +1097,7 @@ app.get('/api/attempts/:attemptId', requireAuth('teacher'), h(async (req, res) =
     questionId: r.question_id,
     type: r.type,
     prompt: r.prompt,
+    section: r.section,
     options: JSON.parse(r.options_json),
     correctAnswer: r.correct_answer,
     image: r.image_url,
