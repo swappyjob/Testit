@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { api } from '../api.js';
 import { useRequireRole } from '../auth.js';
 import { DashboardBar, Modal, Msg, PasswordInput } from '../components.jsx';
@@ -19,8 +19,10 @@ export default function TeacherDashboard() {
   const openEdit = (id) => { setEditTestId(id); setTab('create'); };
   const afterSave = () => { setEditTestId(null); setTab('tests'); };
 
-  const Tab = ({ id, label, onClick }) => (
-    <button className={'tab' + (tab === id ? ' active' : '')} onClick={onClick || (() => setTab(id))}>{label}</button>
+  const Tab = ({ id, label, icon, onClick }) => (
+    <button className={'tab' + (tab === id ? ' active' : '')} onClick={onClick || (() => setTab(id))}>
+      <span aria-hidden="true">{icon}</span> {label}
+    </button>
   );
 
   return (
@@ -29,12 +31,13 @@ export default function TeacherDashboard() {
         <button className="btn ghost small" onClick={() => setShowProfile(true)}>⚙ Profile</button>
       </DashboardBar>
       <div className="container">
+        {tab !== 'create' && <StatsBar />}
         <div className="tabs">
-          <Tab id="tests" label="My Tests" />
-          <Tab id="create" label="Create Test" onClick={openCreate} />
-          <Tab id="students" label="Students" />
-          <Tab id="teachers" label="Teachers" />
-          <Tab id="subscription" label="Subscription" />
+          <Tab id="tests" label="My Tests" icon="📋" />
+          <Tab id="create" label="Create Test" icon="➕" onClick={openCreate} />
+          <Tab id="students" label="Students" icon="👥" />
+          <Tab id="teachers" label="Teachers" icon="🧑‍🏫" />
+          <Tab id="subscription" label="Subscription" icon="💳" />
         </div>
         {tab === 'tests' && <MyTests onEdit={openEdit} />}
         {tab === 'create' && <TestBuilder key={editTestId || 'new'} editId={editTestId} onSaved={afterSave} onCancel={() => { setEditTestId(null); setTab('tests'); }} />}
@@ -44,6 +47,42 @@ export default function TeacherDashboard() {
       </div>
       {showProfile && <ProfileModal me={me} onClose={() => setShowProfile(false)} />}
     </>
+  );
+}
+
+// At-a-glance counts across the organization. Fails quietly if any call errors.
+function StatsBar() {
+  const [s, setS] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    Promise.all([
+      api('/api/tests').then((d) => d.tests).catch(() => []),
+      api('/api/students').then((d) => d.students).catch(() => []),
+      api('/api/teachers').then((d) => d.teachers).catch(() => []),
+    ]).then(([tests, students, teachers]) => {
+      if (!alive) return;
+      const signedUpStudents = students.filter((x) => x.signedUp).length;
+      const assigned = tests.reduce((n, t) => n + (t.assigned_count || 0), 0);
+      setS({ tests: tests.length, students: signedUpStudents || students.length, teachers: teachers.length, assigned });
+    });
+    return () => { alive = false; };
+  }, []);
+  if (!s) return null;
+  const items = [
+    { ic: '📝', n: s.tests, l: 'Tests' },
+    { ic: '👥', n: s.students, l: 'Students' },
+    { ic: '🧑‍🏫', n: s.teachers, l: 'Teachers' },
+    { ic: '📌', n: s.assigned, l: 'Assignments' },
+  ];
+  return (
+    <div className="stats">
+      {items.map((it) => (
+        <div className="stat" key={it.l}>
+          <span className="ic" aria-hidden="true">{it.ic}</span>
+          <span><span className="n">{it.n}</span><br /><span className="l">{it.l}</span></span>
+        </div>
+      ))}
+    </div>
   );
 }
 

@@ -13,13 +13,22 @@ export function Topbar({ brandTo = '/', center = null, right = null }) {
   );
 }
 
+// Two-letter initials from a "Name · Role" label.
+function initialsOf(who) {
+  const name = String(who || '').split('·')[0].trim();
+  const parts = name.split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '?';
+  return ((parts[0][0] || '') + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase();
+}
+
 // A dashboard top bar with the user label, optional org name, and log out.
 export function DashboardBar({ who, orgName, children }) {
   return (
     <div className="topbar">
       <Link className="brand" to="#" onClick={(e) => e.preventDefault()}>📝 Test<span>Platform</span></Link>
-      {orgName ? <span style={{ fontWeight: 700 }}>🏢 {orgName}</span> : <span />}
-      <div className="row">
+      {orgName ? <span className="org-chip">🏢 {orgName}</span> : <span />}
+      <div className="row" style={{ gap: 10 }}>
+        {who && <span className="avatar" title={who}>{initialsOf(who)}</span>}
         {who && <span className="user">{who}</span>}
         {children}
         <button className="btn ghost small" onClick={logout}>Log out</button>
