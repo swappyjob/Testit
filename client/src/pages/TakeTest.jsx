@@ -4,6 +4,30 @@ import { api } from '../api.js';
 import { useRequireRole } from '../auth.js';
 import { DashboardBar, Msg, fmtDateTime } from '../components.jsx';
 
+// Per-section score table. Only renders when the test actually used sections.
+function SectionBreakdown({ rows }) {
+  if (!Array.isArray(rows)) return null;
+  const named = rows.filter((r) => r.section);
+  if (named.length === 0) return null;
+  const anyPending = rows.some((r) => r.pending);
+  return (
+    <div style={{ maxWidth: 420, margin: '4px auto 18px', textAlign: 'left' }}>
+      <h3 style={{ marginBottom: 6 }}>Section-wise score</h3>
+      <table>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={i}>
+              <td>{r.section || 'Other'}{r.pending ? ' *' : ''}</td>
+              <td style={{ textAlign: 'right', fontWeight: 600 }}>{r.awarded} / {r.max}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {anyPending && <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>* includes written answers still to be graded.</p>}
+    </div>
+  );
+}
+
 export default function TakeTest() {
   const user = useRequireRole('student', '/student-login');
   const [params] = useSearchParams();
@@ -82,6 +106,7 @@ export default function TakeTest() {
               {result.auto ? "⏱ Time's up — your test was submitted automatically. " : ''}
               {result.needsGrading ? 'Some written answers still need to be graded by your teacher.' : ''}
             </p>
+            <SectionBreakdown rows={result.sectionBreakdown} />
             <Link className="btn" to="/student">Back to my tests</Link>
           </div>
         </div>

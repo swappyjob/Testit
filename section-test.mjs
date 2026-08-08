@@ -64,7 +64,18 @@ ok('student take-view exposes each question section');
 // Submit, then the teacher review shows the section per answer.
 const payload = {};
 take.questions.forEach((q) => { payload[q.id] = q.type === 'multi' ? '[1]' : q.type === 'truefalse' ? 'true' : ''; });
-await call(student, '/api/submit/' + aid, 'POST', { answers: payload });
+const submit = await call(student, '/api/submit/' + aid, 'POST', { answers: payload });
+
+// The submit response carries a per-section score breakdown.
+const bd = Object.fromEntries((submit.sectionBreakdown || []).map((r) => [r.section, r]));
+// Student answered 2+2 -> [1] (correct, +1) and H2O -> [1] (wrong: correct is [0]).
+if (!bd['Quantitative Aptitude'] || bd['Quantitative Aptitude'].awarded !== 1 || bd['Quantitative Aptitude'].max !== 1)
+  throw new Error('QA breakdown wrong: ' + JSON.stringify(bd['Quantitative Aptitude']));
+if (!bd['Chemistry'] || bd['Chemistry'].awarded !== 0 || bd['Chemistry'].max !== 1)
+  throw new Error('Chemistry breakdown wrong: ' + JSON.stringify(bd['Chemistry']));
+if (!bd['Physics'] || bd['Physics'].awarded !== 1) throw new Error('Physics breakdown wrong');
+if (!bd[''] || bd[''].pending !== true) throw new Error('unsectioned short answer should be pending');
+ok('submit returns a correct per-section score breakdown');
 const { results } = await call(teacher, '/api/tests/' + testId + '/results');
 const attemptId = results[0].attemptId;
 const review = await call(teacher, '/api/attempts/' + attemptId);

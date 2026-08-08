@@ -992,8 +992,13 @@ app.post('/api/submit/:assignmentId', requireAuth('student'), h(async (req, res)
   let maxScore = 0;
   let needsGrading = 0;
   const graded = [];
+  const secOrder = [];               // section names in first-appearance order
+  const secMap = {};                 // name -> { awarded, max, pending }
   for (const q of questions) {
     maxScore += q.points;
+    const sec = q.section || '';
+    if (!(sec in secMap)) { secMap[sec] = { awarded: 0, max: 0, pending: false }; secOrder.push(sec); }
+    secMap[sec].max += q.points;
     const resp = responses[q.id] != null ? String(responses[q.id]) : '';
     let isCorrect = null;
     let awarded = 0;
@@ -1016,9 +1021,14 @@ app.post('/api/submit/:assignmentId', requireAuth('student'), h(async (req, res)
       autoScore += awarded;
     } else {
       needsGrading = 1; // short answer — teacher grades later
+      secMap[sec].pending = true;
     }
+    secMap[sec].awarded += awarded;
     graded.push({ questionId: q.id, response: resp, isCorrect, awarded });
   }
+  const sectionBreakdown = secOrder.map((name) => ({
+    section: name, awarded: secMap[name].awarded, max: secMap[name].max, pending: secMap[name].pending,
+  }));
 
   await tx(async (t) => {
     let attemptId;
@@ -1043,7 +1053,7 @@ app.post('/api/submit/:assignmentId', requireAuth('student'), h(async (req, res)
       );
     }
   });
-  res.json({ autoScore, maxScore, needsGrading: !!needsGrading });
+  res.json({ autoScore, maxScore, needsGrading: !!needsGrading, sectionBreakdown });
 }));
 
 // ============================================================================

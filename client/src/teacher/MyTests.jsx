@@ -155,6 +155,19 @@ function AttemptPanel({ test, attemptId, onBack }) {
   const { attempt, items } = data;
   const hasShort = items.some((i) => i.type === 'short');
 
+  // Per-section breakdown, computed from the answers (in first-appearance order).
+  const secOrder = [];
+  const secMap = {};
+  items.forEach((it) => {
+    const sec = it.section || '';
+    if (!(sec in secMap)) { secMap[sec] = { awarded: 0, max: 0, pending: false }; secOrder.push(sec); }
+    secMap[sec].max += it.points;
+    secMap[sec].awarded += (it.pointsAwarded || 0);
+    if (it.type === 'short' && it.isCorrect === null) secMap[sec].pending = true;
+  });
+  const breakdown = secOrder.map((name) => ({ section: name, ...secMap[name] }));
+  const hasSections = breakdown.some((b) => b.section);
+
   return (
     <div className="card">
       <h2>{attempt.name} — {test.title}</h2>
@@ -162,6 +175,19 @@ function AttemptPanel({ test, attemptId, onBack }) {
         Score: <b>{attempt.autoScore + attempt.manualScore}</b> / {attempt.maxScore}
         {attempt.needsGrading ? <> · <span className="pill amber">has answers to grade</span></> : null}
       </p>
+      {hasSections && (
+        <table style={{ maxWidth: 420, marginBottom: 12 }}>
+          <thead><tr><th>Section</th><th style={{ textAlign: 'right' }}>Score</th></tr></thead>
+          <tbody>
+            {breakdown.map((b, i) => (
+              <tr key={i}>
+                <td>{b.section || 'Other'}{b.pending ? ' *' : ''}</td>
+                <td style={{ textAlign: 'right', fontWeight: 600 }}>{b.awarded} / {b.max}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
       <Msg text={msg} kind="ok" />
       {items.map((it, i) => (
         <div className="q-card" key={it.answerId}>
