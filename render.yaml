@@ -12,7 +12,7 @@ services:
     dockerfilePath: ./Dockerfile
     plan: starter                 # paid instance; required for a persistent disk
     healthCheckPath: /api/me      # returns 200 (JSON) even when logged out
-    autoDeploy: true              # redeploy on every push to the tracked branch
+    autoDeploy: false             # manual deploys only — deploy from the Render dashboard
     disk:
       name: uploads
       mountPath: /data            # UPLOAD_DIR points here so images survive redeploys
