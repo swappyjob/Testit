@@ -37,13 +37,11 @@ export default function TeacherDashboard() {
           <Tab id="create" label="Create Test" icon="➕" onClick={openCreate} />
           <Tab id="students" label="Students" icon="👥" />
           <Tab id="teachers" label="Teachers" icon="🧑‍🏫" />
-          <Tab id="subscription" label="Subscription" icon="💳" />
         </div>
         {tab === 'tests' && <MyTests onEdit={openEdit} />}
         {tab === 'create' && <TestBuilder key={editTestId || 'new'} editId={editTestId} onSaved={afterSave} onCancel={() => { setEditTestId(null); setTab('tests'); }} />}
         {tab === 'students' && <StudentsTab />}
         {tab === 'teachers' && <TeachersTab />}
-        {tab === 'subscription' && <SubscriptionTab isRoot={me.isRoot} />}
       </div>
       {showProfile && <ProfileModal me={me} onClose={() => setShowProfile(false)} />}
     </>
@@ -87,6 +85,7 @@ function StatsBar() {
 }
 
 function ProfileModal({ me, onClose }) {
+  const [pane, setPane] = useState('account');
   const [cur, setCur] = useState('');
   const [nw, setNw] = useState('');
   const [confirm, setConfirm] = useState('');
@@ -101,22 +100,33 @@ function ProfileModal({ me, onClose }) {
     } catch (e) { setMsg({ ok: false, text: e.message }); }
   }
   return (
-    <Modal title="Profile" onClose={onClose}>
+    <Modal title="Profile" onClose={onClose} wide>
       <p className="muted">{me.name} · {me.email}</p>
-      {msg && <Msg text={msg.text} kind={msg.ok ? 'ok' : 'error'} />}
-      <h3 style={{ marginTop: 16 }}>Change password</h3>
-      <form onSubmit={submit}>
-        <label>Current password</label>
-        <PasswordInput value={cur} onChange={(e) => setCur(e.target.value)} required autoComplete="current-password" />
-        <label>New password (min 6 characters)</label>
-        <PasswordInput value={nw} onChange={(e) => setNw(e.target.value)} required autoComplete="new-password" />
-        <label>Confirm new password</label>
-        <PasswordInput value={confirm} onChange={(e) => setConfirm(e.target.value)} required autoComplete="new-password" />
-        <div className="row" style={{ marginTop: 18 }}>
-          <button className="btn" type="submit">Update password</button>
-          <button className="btn ghost" type="button" onClick={onClose}>Cancel</button>
-        </div>
-      </form>
+      <div className="tabs" style={{ marginTop: 10, marginBottom: 18 }}>
+        <button className={'tab' + (pane === 'account' ? ' active' : '')} onClick={() => setPane('account')}>🔒 Account</button>
+        <button className={'tab' + (pane === 'subscription' ? ' active' : '')} onClick={() => setPane('subscription')}>💳 Subscription</button>
+      </div>
+
+      {pane === 'account' && (
+        <>
+          {msg && <Msg text={msg.text} kind={msg.ok ? 'ok' : 'error'} />}
+          <h3>Change password</h3>
+          <form onSubmit={submit}>
+            <label>Current password</label>
+            <PasswordInput value={cur} onChange={(e) => setCur(e.target.value)} required autoComplete="current-password" />
+            <label>New password (min 6 characters)</label>
+            <PasswordInput value={nw} onChange={(e) => setNw(e.target.value)} required autoComplete="new-password" />
+            <label>Confirm new password</label>
+            <PasswordInput value={confirm} onChange={(e) => setConfirm(e.target.value)} required autoComplete="new-password" />
+            <div className="row" style={{ marginTop: 18 }}>
+              <button className="btn" type="submit">Update password</button>
+              <button className="btn ghost" type="button" onClick={onClose}>Cancel</button>
+            </div>
+          </form>
+        </>
+      )}
+
+      {pane === 'subscription' && <SubscriptionTab isRoot={me.isRoot} embedded />}
     </Modal>
   );
 }

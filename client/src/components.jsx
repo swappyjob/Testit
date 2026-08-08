@@ -55,13 +55,13 @@ export function PasswordInput(props) {
   );
 }
 
-// Modal overlay; closes on backdrop click or the ✕ button.
-export function Modal({ title, onClose, children }) {
+// Modal overlay; closes on backdrop click or the ✕ button. `wide` widens it.
+export function Modal({ title, onClose, children, wide = false }) {
   const backdrop = useRef(null);
   return (
     <div className="modal-overlay" ref={backdrop}
       onClick={(e) => { if (e.target === backdrop.current) onClose(); }}>
-      <div className="modal">
+      <div className="modal" style={wide ? { maxWidth: 680 } : undefined}>
         <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
           <h2 style={{ margin: 0 }}>{title}</h2>
           <button className="btn ghost small" onClick={onClose}>✕</button>

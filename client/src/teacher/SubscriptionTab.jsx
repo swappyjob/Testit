@@ -5,7 +5,8 @@ import { fmtPrice, fmtCap } from '../pages/AdminDashboard.jsx';
 
 // Root teachers can view their organization's plan and switch to another.
 // Non-root teachers see the plans but can't change them.
-export default function SubscriptionTab({ isRoot }) {
+// `embedded` renders without the big page card (e.g. inside the Profile dialog).
+export default function SubscriptionTab({ isRoot, embedded = false }) {
   const [data, setData] = useState(null); // { plan, studentCount, plans }
   const [msg, setMsg] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -24,46 +25,55 @@ export default function SubscriptionTab({ isRoot }) {
     finally { setBusy(false); }
   }
 
-  if (!data) return <div className="card"><p className="muted">Loading…</p></div>;
+  if (!data) return <p className="muted">Loading…</p>;
   const cur = data.plan;
 
+  const summary = (
+    <>
+      {cur ? (
+        <p className="muted" style={{ marginTop: 0 }}>
+          Your organization is on the <b>{cur.name}</b> plan ({fmtPrice(cur)}) — using{' '}
+          <b>{data.studentCount}{cur.max_students != null ? ` / ${cur.max_students}` : ''}</b> student slots.
+        </p>
+      ) : (
+        <p className="muted" style={{ marginTop: 0 }}>No plan assigned yet. Choose one below.</p>
+      )}
+      {msg && <Msg text={msg.text} kind={msg.ok ? 'ok' : 'error'} />}
+      {!isRoot && <p className="muted">Only a root teacher can change the plan.</p>}
+    </>
+  );
+
+  const plans = (
+    <div className="grid two">
+      {data.plans.map((p) => {
+        const isCurrent = cur && cur.id === p.id;
+        const tooSmall = p.max_students != null && data.studentCount > p.max_students;
+        return (
+          <div className="q-card" key={p.id} style={{ margin: 0, ...(isCurrent ? { border: '2px solid var(--brand)' } : {}) }}>
+            <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+              <h3 style={{ margin: 0, fontSize: 17 }}>{p.name}</h3>
+              {isCurrent && <span className="pill brand">Current</span>}
+            </div>
+            <p style={{ fontSize: 22, fontWeight: 700, margin: '6px 0 2px' }}>{fmtPrice(p)}</p>
+            <p className="muted" style={{ margin: '0 0 10px' }}>{fmtCap(p)}</p>
+            {isRoot && !isCurrent && (
+              <button className="btn small" disabled={busy || tooSmall} onClick={() => subscribe(p)}>
+                {tooSmall ? `Too small for ${data.studentCount} students` : 'Subscribe'}
+              </button>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+
+  if (embedded) {
+    return <>{summary}<div style={{ marginTop: 12 }}>{plans}</div></>;
+  }
   return (
     <>
-      <div className="card">
-        <h1 style={{ marginTop: 0 }}>Subscription</h1>
-        {cur ? (
-          <p className="muted">
-            Your organization is on the <b>{cur.name}</b> plan ({fmtPrice(cur)}) — using{' '}
-            <b>{data.studentCount}{cur.max_students != null ? ` / ${cur.max_students}` : ''}</b> student slots.
-          </p>
-        ) : (
-          <p className="muted">No plan assigned yet. Choose one below.</p>
-        )}
-        {msg && <Msg text={msg.text} kind={msg.ok ? 'ok' : 'error'} />}
-        {!isRoot && <p className="muted">Only a root teacher can change the plan.</p>}
-      </div>
-
-      <div className="grid two">
-        {data.plans.map((p) => {
-          const isCurrent = cur && cur.id === p.id;
-          const tooSmall = p.max_students != null && data.studentCount > p.max_students;
-          return (
-            <div className="card" key={p.id} style={isCurrent ? { border: '2px solid var(--brand)' } : undefined}>
-              <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-                <h2 style={{ margin: 0 }}>{p.name}</h2>
-                {isCurrent && <span className="pill brand">Current plan</span>}
-              </div>
-              <p style={{ fontSize: 24, fontWeight: 700, margin: '8px 0 2px' }}>{fmtPrice(p)}</p>
-              <p className="muted" style={{ marginTop: 0 }}>{fmtCap(p)}</p>
-              {isRoot && !isCurrent && (
-                <button className="btn" disabled={busy || tooSmall} onClick={() => subscribe(p)}>
-                  {tooSmall ? `Too small for ${data.studentCount} students` : 'Subscribe to this plan'}
-                </button>
-              )}
-            </div>
-          );
-        })}
-      </div>
+      <div className="card"><h1 style={{ marginTop: 0 }}>Subscription</h1>{summary}</div>
+      {plans}
     </>
   );
 }

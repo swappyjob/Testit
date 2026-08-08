@@ -235,6 +235,7 @@ tbody tr:hover { background: #f7f8fd; }
 .modal {
   background: var(--card); border-radius: var(--radius); box-shadow: 0 20px 60px rgba(16,24,40,.3);
   padding: 24px; width: 100%; max-width: 440px; animation: fadeUp .2s ease both;
+  max-height: 88vh; overflow-y: auto;
 }
 
 /* ---------- Landing hero ---------- */
