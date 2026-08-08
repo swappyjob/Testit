@@ -1,0 +1,15 @@
+# Files not uploaded to Cloud Build when running `gcloud run deploy --source .`
+.git
+.gitignore
+node_modules
+client/node_modules
+client/dist
+.env
+gcp-env.yaml
+*.sql
+*.log
+public/uploads
+.vscode
+.idea
+.DS_Store
+Thumbs.db

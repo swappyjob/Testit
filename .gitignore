@@ -6,4 +6,6 @@ data.db-shm
 data.db-wal
 public/uploads/
 .env
+gcp-env.yaml
+*.sql
 *.log
