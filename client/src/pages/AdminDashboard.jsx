@@ -163,6 +163,13 @@ function OrgCard({ org, plans, onChanged, onEditTeacher }) {
     const prev = btn.textContent; btn.textContent = 'Copied!';
     setTimeout(() => { btn.textContent = prev; }, 1500);
   }
+  async function copyReset(t, btn) {
+    try {
+      const { resetPath } = await api('/api/admin/teachers/' + t.id + '/reset-link', 'POST');
+      await copy(window.location.origin + resetPath, btn);
+      setMsg({ ok: true, text: `Reset link for ${t.name} copied — send it to them. It expires in 1 hour.` });
+    } catch (e) { setMsg({ ok: false, text: e.message }); }
+  }
 
   return (
     <div className="card">
@@ -230,6 +237,7 @@ function OrgCard({ org, plans, onChanged, onEditTeacher }) {
                       {t.disabled ? <span className="pill gray">disabled</span> : <span className="pill green">active</span>}
                       <button className={`btn ${t.disabled ? 'secondary' : 'danger'} small`} style={{ marginLeft: 8 }} onClick={() => toggle(t)}>{t.disabled ? 'Enable' : 'Disable'}</button>
                       <button className="btn ghost small" style={{ marginLeft: 8 }} onClick={() => onEditTeacher(t)}>Edit</button>
+                      <button className="btn secondary small" style={{ marginLeft: 8 }} onClick={(e) => copyReset(t, e.target)}>Reset link</button>
                     </>
                   )}
                 </td>

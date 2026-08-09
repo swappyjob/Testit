@@ -87,6 +87,19 @@ if (!uA.isRoot || uA.role !== 'teacher' || !uA.orgId) throw new Error('root teac
 if (uA.orgId === uB.orgId) throw new Error('root teachers should be in different orgs');
 ok('admin-created root teachers sign up into their organizations');
 
+// --- Admin can generate a password-reset link for any teacher ---
+if ((await call(rando, '/api/admin/teachers/' + uA.id + '/reset-link', 'POST', undefined, false)).status !== 403)
+  throw new Error('non-admin should be 403 generating a teacher reset link');
+if ((await call(admin, '/api/admin/teachers/99999999/reset-link', 'POST', undefined, false)).status !== 404)
+  throw new Error('unknown teacher should be 404');
+const link = (await call(admin, '/api/admin/teachers/' + uA.id + '/reset-link', 'POST')).data;
+const resetToken = tokenOf(link.resetPath);
+if (!resetToken) throw new Error('admin reset link missing a token');
+// The generated token is valid and points at the right teacher (non-destructive check).
+const chk = (await call(makeJar(), '/api/reset/' + resetToken)).data;
+if (chk.email !== `rta${rand}@x.com` || chk.role !== 'teacher') throw new Error('admin reset token is not valid for the teacher');
+ok('admin generates a valid password-reset link for a teacher (403/404 guarded)');
+
 // Root A adds a teacher + student in Org A (student signs up so it counts).
 await call(rootA, '/api/teachers', 'POST', { name: 'TA', email: `ta${rand}@x.com`, phone: '9000000003', isRoot: false });
 const sa = (await call(rootA, '/api/students', 'POST', { name: 'SA', email: `sa${rand}@x.com`, phone: '9000000004' })).data;

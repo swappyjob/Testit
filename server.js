@@ -666,6 +666,15 @@ app.put('/api/admin/teachers/:id', requireAdmin, h(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// Admin generates a password-reset link for any teacher (in any organization).
+app.post('/api/admin/teachers/:id/reset-link', requireAdmin, h(async (req, res) => {
+  const teacherId = Number(req.params.id);
+  const t = await get("SELECT id FROM users WHERE id = ? AND role = 'teacher'", [teacherId]);
+  if (!t) return res.status(404).json({ error: 'Teacher not found.' });
+  const token = await createResetToken(teacherId);
+  res.json({ resetPath: `/reset?token=${token}` });
+}));
+
 // Admin renames an organization.
 app.put('/api/orgs/:id', requireAdmin, h(async (req, res) => {
   const name = (req.body.name || '').trim();
