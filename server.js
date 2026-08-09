@@ -1011,6 +1011,35 @@ app.get('/api/my-assignments', requireAuth('student'), h(async (req, res) => {
   res.json({ assignments });
 }));
 
+// A student reviews their own submitted attempt (read-only): questions, their
+// answers, the correct answers, and per-question marks.
+app.get('/api/my-review/:assignmentId', requireAuth('student'), h(async (req, res) => {
+  const a = await get('SELECT * FROM assignments WHERE id = ? AND student_id = ?', [req.params.assignmentId, req.user.id]);
+  if (!a) return res.status(404).json({ error: 'Assignment not found.' });
+  const attempt = await get('SELECT * FROM attempts WHERE assignment_id = ? AND submitted_at IS NOT NULL', [a.id]);
+  if (!attempt) return res.status(403).json({ error: 'You can review this test only after you submit it.' });
+  const test = await get('SELECT title FROM tests WHERE id = ?', [a.test_id]);
+  const items = (await all(
+    `SELECT ans.response, ans.is_correct, ans.points_awarded,
+            q.type, q.prompt, q.options_json, q.correct_answer, q.image_url, q.points, q.section
+       FROM answers ans JOIN questions q ON q.id = ans.question_id
+      WHERE ans.attempt_id = ? ORDER BY q.position`,
+    [attempt.id]
+  )).map((r) => ({
+    type: r.type, prompt: r.prompt, section: r.section,
+    options: JSON.parse(r.options_json), response: r.response,
+    correctAnswer: r.correct_answer, isCorrect: r.is_correct,
+    pointsAwarded: r.points_awarded, points: r.points, image: r.image_url,
+  }));
+  res.json({
+    test: { title: test.title },
+    score: attempt.auto_score + attempt.manual_score,
+    maxScore: attempt.max_score,
+    needsGrading: !!attempt.needs_grading,
+    items,
+  });
+}));
+
 // Fetch a test to take — WITHOUT correct answers.
 app.get('/api/take/:assignmentId', requireAuth('student'), h(async (req, res) => {
   const a = await get('SELECT * FROM assignments WHERE id = ? AND student_id = ?', [req.params.assignmentId, req.user.id]);

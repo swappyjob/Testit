@@ -10,6 +10,7 @@ import ForgotPassword from './pages/ForgotPassword.jsx';
 import Reset from './pages/Reset.jsx';
 import StudentDashboard from './pages/StudentDashboard.jsx';
 import TakeTest from './pages/TakeTest.jsx';
+import StudentReview from './pages/StudentReview.jsx';
 import TeacherDashboard from './pages/TeacherDashboard.jsx';
 import AdminDashboard from './pages/AdminDashboard.jsx';
 
@@ -41,6 +42,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
         <Route path="/reset" element={<Reset />} />
         <Route path="/student" element={<StudentDashboard />} />
         <Route path="/take-test" element={<TakeTest />} />
+        <Route path="/review" element={<StudentReview />} />
         <Route path="/teacher" element={<TeacherDashboard />} />
         <Route path="/admin" element={<AdminDashboard />} />
         <Route path="*" element={<Landing />} />

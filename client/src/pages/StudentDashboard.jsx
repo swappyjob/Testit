@@ -31,9 +31,12 @@ export default function StudentDashboard() {
               </div>
               <div className="row">
                 {a.submitted ? (
-                  a.needsGrading
-                    ? <span className="pill amber">submitted · awaiting grade</span>
-                    : <span className="pill green">Score: {a.score} / {a.maxScore}</span>
+                  <>
+                    {a.needsGrading
+                      ? <span className="pill amber">submitted · awaiting grade</span>
+                      : <span className="pill green">Score: {a.score} / {a.maxScore}</span>}
+                    <Link className="btn secondary small" to={'/review?a=' + a.assignmentId}>Review answers</Link>
+                  </>
                 ) : a.closed ? (
                   <span className="pill gray">closed · deadline passed</span>
                 ) : (

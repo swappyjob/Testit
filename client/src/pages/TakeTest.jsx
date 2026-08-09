@@ -162,7 +162,10 @@ export default function TakeTest() {
               {result.needsGrading ? 'Some written answers still need to be graded by your teacher.' : ''}
             </p>
             <SectionBreakdown rows={result.sectionBreakdown} />
-            <Link className="btn" to="/student">Back to my tests</Link>
+            <div className="row" style={{ justifyContent: 'center', gap: 10 }}>
+              <Link className="btn secondary" to={'/review?a=' + assignmentId}>Review my answers</Link>
+              <Link className="btn" to="/student">Back to my tests</Link>
+            </div>
           </div>
         </div>
       </>
