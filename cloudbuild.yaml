@@ -1,0 +1,31 @@
+# Cloud Build config for a one-click / auto deploy to Cloud Run.
+# Used by a Cloud Build trigger connected to the GitHub repo. Cloud Run keeps the
+# env vars, Cloud SQL connection and uploads bucket from the previous deploy, so
+# this build only rebuilds the image and ships it.
+substitutions:
+  _REGION: asia-south1
+  _SERVICE: testit
+  _REPO: cloud-run-source-deploy
+
+steps:
+  # Build the image from the Dockerfile.
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:$BUILD_ID', '.']
+  # Push it to Artifact Registry.
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:$BUILD_ID']
+  # Deploy to Cloud Run (existing service config is preserved).
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_SERVICE}
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:$BUILD_ID
+      - --region=${_REGION}
+
+images:
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:$BUILD_ID'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
