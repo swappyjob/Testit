@@ -115,7 +115,8 @@ app.use(h(async (req, res, next) => {
   const sid = parseCookies(req).sid;
   if (sid) {
     const row = await get(
-      `SELECT u.*, o.name AS org_name FROM sessions s JOIN users u ON u.id = s.user_id
+      `SELECT u.*, o.name AS org_name, o.subscription_expires_at AS org_subscription_until
+         FROM sessions s JOIN users u ON u.id = s.user_id
          LEFT JOIN organizations o ON o.id = u.org_id
         WHERE s.token = ? AND u.disabled = 0`,
       [sid]
@@ -150,13 +151,30 @@ function requireAdmin(req, res, next) {
   next();
 }
 
+// When a teacher's organization subscription has expired, the whole org drops to
+// read-only: block every create/edit/delete. Reads are unaffected. Admins and
+// students are not subject to this check.
+function requireActiveSubscription(req, res, next) {
+  if (req.user && req.user.role === 'teacher' && isExpired(req.user.org_subscription_until)) {
+    return res.status(403).json({
+      error: "Your organization's subscription has expired, so the account is in read-only mode. Please ask your administrator to renew it.",
+    });
+  }
+  next();
+}
+
 async function startSession(res, userId) {
   const token = randomToken();
   await run('INSERT INTO sessions (token, user_id) VALUES (?, ?)', [token, userId]);
   res.cookie('sid', token, { httpOnly: true, sameSite: 'lax', secure: PROD, maxAge: 1000 * 60 * 60 * 24 * 7 });
 }
 
-const publicUser = (u) => ({ id: u.id, role: u.role, name: u.name, email: u.email, isRoot: !!u.is_root, orgId: u.org_id, orgName: u.org_name || null });
+const publicUser = (u) => ({
+  id: u.id, role: u.role, name: u.name, email: u.email, isRoot: !!u.is_root,
+  orgId: u.org_id, orgName: u.org_name || null,
+  subscriptionUntil: u.org_subscription_until || null,
+  subscriptionExpired: isExpired(u.org_subscription_until),
+});
 
 // ============================================================================
 // AUTH
@@ -276,7 +294,7 @@ app.post('/api/reset/:token', h(async (req, res) => {
 // ============================================================================
 // STUDENTS + SIGNUP LINKS  (teacher creates students)
 // ============================================================================
-app.post('/api/students', requireAuth('teacher'), h(async (req, res) => {
+app.post('/api/students', requireAuth('teacher'), requireActiveSubscription, h(async (req, res) => {
   const name = (req.body.name || '').trim();
   const email = (req.body.email || '').trim().toLowerCase();
   const phone = (req.body.phone || '').trim();
@@ -374,7 +392,7 @@ app.get('/api/students/export.csv', requireAuth('teacher'), h(async (req, res) =
 
 // Enable/disable a student. A disabled student cannot log in, and any active
 // session is revoked immediately.
-app.patch('/api/students/:id', requireAuth('teacher'), h(async (req, res) => {
+app.patch('/api/students/:id', requireAuth('teacher'), requireActiveSubscription, h(async (req, res) => {
   const studentId = Number(req.params.id);
   const owned = await get(
     "SELECT 1 FROM users WHERE id = ? AND role = 'student' AND org_id = ?",
@@ -389,7 +407,7 @@ app.patch('/api/students/:id', requireAuth('teacher'), h(async (req, res) => {
 
 // Edit a student's details (name, phone, access end date). Email is immutable.
 // :id is the signup-invite id (works for pending and signed-up students).
-app.put('/api/students/:id', requireAuth('teacher'), h(async (req, res) => {
+app.put('/api/students/:id', requireAuth('teacher'), requireActiveSubscription, h(async (req, res) => {
   const tok = await get(
     "SELECT * FROM signup_tokens WHERE id = ? AND org_id = ? AND invite_role = 'student'",
     [Number(req.params.id), req.user.org_id]
@@ -413,7 +431,7 @@ app.put('/api/students/:id', requireAuth('teacher'), h(async (req, res) => {
 }));
 
 // Teacher generates a password-reset link for one of their students.
-app.post('/api/students/:id/reset-link', requireAuth('teacher'), h(async (req, res) => {
+app.post('/api/students/:id/reset-link', requireAuth('teacher'), requireActiveSubscription, h(async (req, res) => {
   const studentId = Number(req.params.id);
   const owned = await get("SELECT 1 FROM users WHERE id = ? AND role = 'student' AND org_id = ?", [studentId, req.user.org_id]);
   if (!owned) return res.status(404).json({ error: 'Student not found.' });
@@ -424,7 +442,7 @@ app.post('/api/students/:id/reset-link', requireAuth('teacher'), h(async (req, r
 // ============================================================================
 // TEACHERS  (root teachers can invite other teachers)
 // ============================================================================
-app.post('/api/teachers', requireRoot, h(async (req, res) => {
+app.post('/api/teachers', requireRoot, requireActiveSubscription, h(async (req, res) => {
   const name = (req.body.name || '').trim();
   const email = (req.body.email || '').trim().toLowerCase();
   const phone = (req.body.phone || '').trim();
@@ -475,7 +493,7 @@ app.get('/api/teachers', requireAuth('teacher'), h(async (req, res) => {
 
 // Root enables/disables another teacher. A disabled teacher cannot log in and
 // is logged out immediately. A root cannot disable their own account.
-app.patch('/api/teachers/:id', requireRoot, h(async (req, res) => {
+app.patch('/api/teachers/:id', requireRoot, requireActiveSubscription, h(async (req, res) => {
   const teacherId = Number(req.params.id);
   if (teacherId === req.user.id)
     return res.status(400).json({ error: "You can't disable your own account." });
@@ -488,7 +506,7 @@ app.patch('/api/teachers/:id', requireRoot, h(async (req, res) => {
 }));
 
 // Root generates a password-reset link for a teacher in their organization.
-app.post('/api/teachers/:id/reset-link', requireRoot, h(async (req, res) => {
+app.post('/api/teachers/:id/reset-link', requireRoot, requireActiveSubscription, h(async (req, res) => {
   const teacherId = Number(req.params.id);
   const t = await get("SELECT id FROM users WHERE id = ? AND role = 'teacher' AND org_id = ?", [teacherId, req.user.org_id]);
   if (!t) return res.status(404).json({ error: 'Teacher not found.' });
@@ -526,6 +544,18 @@ app.put('/api/orgs/:id/plan', requireAdmin, h(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// Admin sets (or clears) an organization's subscription expiry date (YYYY-MM-DD).
+// Empty string clears it (no expiry). Once past, the org's teachers go read-only.
+app.put('/api/orgs/:id/subscription', requireAdmin, h(async (req, res) => {
+  if (!(await get('SELECT id FROM organizations WHERE id = ?', [Number(req.params.id)])))
+    return res.status(404).json({ error: 'Organization not found.' });
+  const raw = (req.body.expiresAt || '').trim();
+  if (raw && !/^\d{4}-\d{2}-\d{2}$/.test(raw))
+    return res.status(400).json({ error: 'Date must be in YYYY-MM-DD format (or empty to clear).' });
+  await run('UPDATE organizations SET subscription_expires_at = ? WHERE id = ?', [raw, Number(req.params.id)]);
+  res.json({ ok: true, expiresAt: raw, expired: isExpired(raw) });
+}));
+
 // A teacher views their own organization's current plan, usage, and all plans.
 app.get('/api/my-org/plan', requireAuth('teacher'), h(async (req, res) => {
   const plan = await get(
@@ -557,7 +587,7 @@ app.post('/api/my-org/plan', requireRoot, h(async (req, res) => {
 // Optional ?q= filters by organization name (case-insensitive).
 app.get('/api/orgs', requireAdmin, h(async (req, res) => {
   const q = (req.query.q || '').trim();
-  const cols = 'o.id, o.name, o.plan_id, p.name AS plan_name, p.max_students, p.price_monthly';
+  const cols = 'o.id, o.name, o.plan_id, o.subscription_expires_at, p.name AS plan_name, p.max_students, p.price_monthly';
   const orgs = q
     ? await all(`SELECT ${cols} FROM organizations o LEFT JOIN plans p ON p.id = o.plan_id WHERE o.name ILIKE ? ESCAPE '\\' ORDER BY o.name`,
         ['%' + q.replace(/[\\%_]/g, '\\$&') + '%'])
@@ -579,6 +609,7 @@ app.get('/api/orgs', requireAdmin, h(async (req, res) => {
     result.push({
       id: o.id, name: o.name, teachers, teacherCount: signedUp.length, studentCount,
       planId: o.plan_id, planName: o.plan_name, maxStudents: o.max_students, priceMonthly: o.price_monthly,
+      subscriptionUntil: o.subscription_expires_at || '', subscriptionExpired: isExpired(o.subscription_expires_at),
     });
   }
   res.json({ orgs: result });
@@ -747,7 +778,7 @@ async function writeQuestions(runFn, testId, questions) {
 
 // Accepts a base64 data URL, saves it as an image file, returns its public URL.
 const IMAGE_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
-app.post('/api/upload', requireAuth('teacher'), (req, res) => {
+app.post('/api/upload', requireAuth('teacher'), requireActiveSubscription, (req, res) => {
   const dataUrl = req.body.dataUrl || '';
   const m = /^data:([^;]+);base64,(.+)$/s.exec(dataUrl);
   if (!m) return res.status(400).json({ error: 'Invalid image data.' });
@@ -788,7 +819,7 @@ function readDuration(body) {
   return Number.isFinite(d) && d > 0 ? d : 0;
 }
 
-app.post('/api/tests', requireAuth('teacher'), h(async (req, res) => {
+app.post('/api/tests', requireAuth('teacher'), requireActiveSubscription, h(async (req, res) => {
   const title = (req.body.title || '').trim();
   const description = (req.body.description || '').trim();
   const questions = Array.isArray(req.body.questions) ? req.body.questions : [];
@@ -811,7 +842,7 @@ app.post('/api/tests', requireAuth('teacher'), h(async (req, res) => {
 }));
 
 // Update an existing test — preserves past attempts by archiving answered questions.
-app.put('/api/tests/:id', requireAuth('teacher'), h(async (req, res) => {
+app.put('/api/tests/:id', requireAuth('teacher'), requireActiveSubscription, h(async (req, res) => {
   const test = await get('SELECT * FROM tests WHERE id = ? AND teacher_id = ?', [req.params.id, req.user.id]);
   if (!test) return res.status(404).json({ error: 'Test not found.' });
   const title = (req.body.title || '').trim();
@@ -864,7 +895,7 @@ app.get('/api/tests/:id', requireAuth('teacher'), h(async (req, res) => {
   res.json({ test, questions });
 }));
 
-app.delete('/api/tests/:id', requireAuth('teacher'), h(async (req, res) => {
+app.delete('/api/tests/:id', requireAuth('teacher'), requireActiveSubscription, h(async (req, res) => {
   const test = await get('SELECT * FROM tests WHERE id = ? AND teacher_id = ?', [req.params.id, req.user.id]);
   if (!test) return res.status(404).json({ error: 'Test not found.' });
   await run('DELETE FROM tests WHERE id = ?', [test.id]);
@@ -874,7 +905,7 @@ app.delete('/api/tests/:id', requireAuth('teacher'), h(async (req, res) => {
 // ============================================================================
 // ASSIGNMENTS  (teacher assigns a test to students)
 // ============================================================================
-app.post('/api/assignments', requireAuth('teacher'), h(async (req, res) => {
+app.post('/api/assignments', requireAuth('teacher'), requireActiveSubscription, h(async (req, res) => {
   const testId = Number(req.body.test_id);
   const studentIds = Array.isArray(req.body.student_ids) ? req.body.student_ids.map(Number) : [];
   const test = await get('SELECT * FROM tests WHERE id = ? AND teacher_id = ?', [testId, req.user.id]);
@@ -1129,7 +1160,7 @@ app.get('/api/attempts/:attemptId', requireAuth('teacher'), h(async (req, res) =
 }));
 
 // Teacher grades short answers: { grades: { answerId: points } }
-app.post('/api/attempts/:attemptId/grade', requireAuth('teacher'), h(async (req, res) => {
+app.post('/api/attempts/:attemptId/grade', requireAuth('teacher'), requireActiveSubscription, h(async (req, res) => {
   const attempt = await get(
     `SELECT at.* FROM attempts at JOIN tests t ON t.id = at.test_id
       WHERE at.id = ? AND t.teacher_id = ?`,

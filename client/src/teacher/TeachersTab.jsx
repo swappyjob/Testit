@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { api } from '../api.js';
 import { Msg } from '../components.jsx';
 
-export default function TeachersTab() {
+export default function TeachersTab({ readOnly }) {
   const [data, setData] = useState(null); // { teachers, canManage }
   const [form, setForm] = useState({ name: '', email: '', phone: '', role: 'teacher' });
   const [msg, setMsg] = useState(null);
@@ -38,7 +38,7 @@ export default function TeachersTab() {
 
   return (
     <>
-      {canManage && (
+      {canManage && !readOnly && (
         <div className="card">
           <h1>Add a teacher</h1>
           <p className="muted">Invite another teacher and choose their role. Root teachers can add more teachers; normal teachers cannot.</p>
@@ -80,7 +80,7 @@ export default function TeachersTab() {
                     ) : (
                       <>
                         {t.disabled ? <span className="pill gray">disabled</span> : <span className="pill green">active</span>}
-                        {canManage && !t.isSelf && (
+                        {canManage && !readOnly && !t.isSelf && (
                           <>
                             <button className={`btn ${t.disabled ? 'secondary' : 'danger'} small`} style={{ marginLeft: 8 }} onClick={() => toggle(t)}>{t.disabled ? 'Enable' : 'Disable'}</button>
                             <button className="btn secondary small" style={{ marginLeft: 8 }} onClick={(e) => copyReset(t, e.target)}>Reset link</button>

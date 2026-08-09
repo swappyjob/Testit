@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { api } from '../api.js';
 import { Msg, fmtDateTime } from '../components.jsx';
 
-export default function MyTests({ onEdit }) {
+export default function MyTests({ onEdit, readOnly }) {
   const [tests, setTests] = useState(null);
   const [detail, setDetail] = useState(null); // { kind:'assign'|'results'|'attempt', test, attemptId }
 
@@ -38,10 +38,10 @@ export default function MyTests({ onEdit }) {
               </div>
             </div>
             <div className="row">
-              <button className="btn secondary small" onClick={() => onEdit(t.id)}>Edit</button>
-              <button className="btn small" onClick={() => setDetail({ kind: 'assign', test: t })}>Assign</button>
+              <button className="btn secondary small" disabled={readOnly} onClick={() => onEdit(t.id)}>Edit</button>
+              <button className="btn small" disabled={readOnly} onClick={() => setDetail({ kind: 'assign', test: t })}>Assign</button>
               <button className="btn secondary small" onClick={() => setDetail({ kind: 'results', test: t })}>Results</button>
-              <button className="btn danger small" onClick={() => del(t)}>Delete</button>
+              <button className="btn danger small" disabled={readOnly} onClick={() => del(t)}>Delete</button>
             </div>
           </div>
         ))}
@@ -49,7 +49,7 @@ export default function MyTests({ onEdit }) {
 
       {detail?.kind === 'assign' && <AssignPanel test={detail.test} onChanged={load} />}
       {detail?.kind === 'results' && <ResultsPanel test={detail.test} onGrade={(attemptId) => setDetail({ kind: 'attempt', test: detail.test, attemptId })} />}
-      {detail?.kind === 'attempt' && <AttemptPanel test={detail.test} attemptId={detail.attemptId} onBack={() => setDetail({ kind: 'results', test: detail.test })} />}
+      {detail?.kind === 'attempt' && <AttemptPanel test={detail.test} attemptId={detail.attemptId} readOnly={readOnly} onBack={() => setDetail({ kind: 'results', test: detail.test })} />}
     </>
   );
 }
@@ -132,7 +132,7 @@ function ResultsPanel({ test, onGrade }) {
   );
 }
 
-function AttemptPanel({ test, attemptId, onBack }) {
+function AttemptPanel({ test, attemptId, onBack, readOnly }) {
   const [data, setData] = useState(null);
   const [grades, setGrades] = useState({}); // answerId -> points
   const [msg, setMsg] = useState('');
@@ -239,7 +239,7 @@ function AttemptPanel({ test, attemptId, onBack }) {
           )}
         </div>
       ))}
-      {hasShort && <div style={{ marginTop: 8 }}><button className="btn" onClick={saveGrades}>Save grades</button></div>}
+      {hasShort && !readOnly && <div style={{ marginTop: 8 }}><button className="btn" onClick={saveGrades}>Save grades</button></div>}
       <div style={{ marginTop: 12 }}><button className="btn ghost small" onClick={onBack}>← Back to results</button></div>
     </div>
   );

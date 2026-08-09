@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { api } from '../api.js';
 import { Msg, Modal } from '../components.jsx';
 
-export default function StudentsTab() {
+export default function StudentsTab({ readOnly }) {
   const [students, setStudents] = useState(null);
   const [query, setQuery] = useState('');
   const [form, setForm] = useState({ name: '', email: '', phone: '', accessUntil: '' });
@@ -30,11 +30,12 @@ export default function StudentsTab() {
   useEffect(() => { if (selectedId != null && students && !selected) setSelectedId(null); }, [students]);
 
   if (selected) {
-    return <StudentDetail student={selected} onBack={() => setSelectedId(null)} onChanged={() => load()} />;
+    return <StudentDetail student={selected} readOnly={readOnly} onBack={() => setSelectedId(null)} onChanged={() => load()} />;
   }
 
   return (
     <>
+      {!readOnly && (
       <div className="card">
         <h1>Add a student</h1>
         <p className="muted">Create a student, then open their page to copy their unique signup link and send it to them.</p>
@@ -48,6 +49,7 @@ export default function StudentsTab() {
         <p className="muted" style={{ fontSize: 13, margin: 0 }}>After this date the student is automatically disabled and can no longer log in. Leave blank for no end date.</p>
         <div style={{ marginTop: 16 }}><button className="btn" onClick={addStudent}>Create student &amp; get link</button></div>
       </div>
+      )}
 
       <div className="card">
         <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
@@ -94,7 +96,7 @@ function Field({ label, children }) {
   );
 }
 
-function StudentDetail({ student: s, onBack, onChanged }) {
+function StudentDetail({ student: s, onBack, onChanged, readOnly }) {
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null); // { text, ok }
@@ -131,9 +133,9 @@ function StudentDetail({ student: s, onBack, onChanged }) {
             <button className="btn secondary" onClick={(e) => copyToClipboard(window.location.origin + s.signupPath, e.target)}>Copy signup link</button>
           ) : (
             <>
-              <button className="btn secondary" onClick={() => setEditing(true)} disabled={busy}>Edit</button>
-              <button className={s.disabled ? 'btn secondary' : 'btn danger'} onClick={toggle} disabled={busy}>{s.disabled ? 'Enable account' : 'Disable account'}</button>
-              <button className="btn secondary" onClick={(e) => copyResetLink(e.target)} disabled={busy}>Copy password-reset link</button>
+              <button className="btn secondary" onClick={() => setEditing(true)} disabled={busy || readOnly}>Edit</button>
+              <button className={s.disabled ? 'btn secondary' : 'btn danger'} onClick={toggle} disabled={busy || readOnly}>{s.disabled ? 'Enable account' : 'Disable account'}</button>
+              <button className="btn secondary" onClick={(e) => copyResetLink(e.target)} disabled={busy || readOnly}>Copy password-reset link</button>
             </>
           )}
         </div>

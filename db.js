@@ -214,6 +214,9 @@ async function init() {
 
   // Pricing plans: organizations reference a plan.
   await pool.query('ALTER TABLE organizations ADD COLUMN IF NOT EXISTS plan_id INTEGER REFERENCES plans(id)');
+  // Subscription expiry (YYYY-MM-DD). '' = no expiry / always active. Once past,
+  // the organization's teachers drop to read-only until an admin renews it.
+  await pool.query("ALTER TABLE organizations ADD COLUMN IF NOT EXISTS subscription_expires_at TEXT NOT NULL DEFAULT ''");
   const { rows: [{ c }] } = await pool.query('SELECT COUNT(*)::int AS c FROM plans');
   if (c === 0) {
     await pool.query(`INSERT INTO plans (name, max_students, price_monthly, sort_order) VALUES

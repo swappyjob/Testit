@@ -83,6 +83,7 @@ export default function AdminDashboard() {
 function OrgCard({ org, plans, onChanged, onEditTeacher }) {
   const [renaming, setRenaming] = useState(false);
   const [name, setName] = useState(org.name);
+  const [subUntil, setSubUntil] = useState(org.subscriptionUntil || '');
   const [form, setForm] = useState({ name: '', email: '', phone: '' });
   const [msg, setMsg] = useState(null);
 
@@ -93,6 +94,13 @@ function OrgCard({ org, plans, onChanged, onEditTeacher }) {
   async function changePlan(planId) {
     try { await api('/api/orgs/' + org.id + '/plan', 'PUT', { planId: Number(planId) }); onChanged(); }
     catch (e) { setMsg({ ok: false, text: e.message }); }
+  }
+  async function saveSubscription(value) {
+    try {
+      await api('/api/orgs/' + org.id + '/subscription', 'PUT', { expiresAt: value });
+      setMsg({ ok: true, text: value ? `Subscription set to expire on ${value}.` : 'Subscription expiry cleared (no expiry).' });
+      onChanged();
+    } catch (e) { setMsg({ ok: false, text: e.message }); }
   }
   const overLimit = org.maxStudents != null && org.studentCount > org.maxStudents;
   async function addRoot() {
@@ -142,6 +150,20 @@ function OrgCard({ org, plans, onChanged, onEditTeacher }) {
           {org.studentCount}{org.maxStudents != null ? ' / ' + org.maxStudents : ''} students used
         </span>
         {overLimit && <span className="pill amber">over limit — upgrade</span>}
+      </div>
+
+      <div className="row" style={{ alignItems: 'center', gap: 10, marginTop: 10 }}>
+        <label style={{ margin: 0 }}>Subscription until:</label>
+        <input type="date" value={subUntil} onChange={(e) => setSubUntil(e.target.value)} style={{ width: 'auto' }} />
+        <button className="btn secondary small" onClick={() => saveSubscription(subUntil)}>Save</button>
+        {org.subscriptionUntil
+          ? (org.subscriptionExpired
+              ? <span className="pill amber">expired — read-only</span>
+              : <span className="pill green">active until {org.subscriptionUntil}</span>)
+          : <span className="pill gray">no expiry</span>}
+        {org.subscriptionUntil && (
+          <button className="btn ghost small" onClick={() => { setSubUntil(''); saveSubscription(''); }}>Clear</button>
+        )}
       </div>
 
       <h3 style={{ marginTop: 14 }}>Teachers</h3>

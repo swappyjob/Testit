@@ -15,12 +15,15 @@ export default function TeacherDashboard() {
   const [showProfile, setShowProfile] = useState(false);
   if (!me) return null;
 
-  const openCreate = () => { setEditTestId(null); setTab('create'); };
+  const readOnly = !!me.subscriptionExpired;
+  const openCreate = () => { if (readOnly) return; setEditTestId(null); setTab('create'); };
   const openEdit = (id) => { setEditTestId(id); setTab('create'); };
   const afterSave = () => { setEditTestId(null); setTab('tests'); };
 
-  const Tab = ({ id, label, icon, onClick }) => (
-    <button className={'tab' + (tab === id ? ' active' : '')} onClick={onClick || (() => setTab(id))}>
+  const Tab = ({ id, label, icon, onClick, disabled }) => (
+    <button className={'tab' + (tab === id ? ' active' : '')} disabled={disabled}
+      title={disabled ? 'Unavailable while the subscription is expired' : undefined}
+      onClick={onClick || (() => setTab(id))}>
       <span aria-hidden="true">{icon}</span> {label}
     </button>
   );
@@ -31,17 +34,27 @@ export default function TeacherDashboard() {
         <button className="btn ghost small" onClick={() => setShowProfile(true)}>⚙ Profile</button>
       </DashboardBar>
       <div className="container">
+        {readOnly && (
+          <div className="msg error" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 20 }}>🔒</span>
+            <span>
+              <b>Read-only mode — your organization's subscription has expired</b>
+              {me.subscriptionUntil ? ` (on ${me.subscriptionUntil})` : ''}. You can still view everything, but creating,
+              editing and deleting are disabled. Ask your administrator to renew the subscription.
+            </span>
+          </div>
+        )}
         {tab !== 'create' && <StatsBar />}
         <div className="tabs">
           <Tab id="tests" label="My Tests" icon="📋" />
-          <Tab id="create" label="Create Test" icon="➕" onClick={openCreate} />
+          <Tab id="create" label="Create Test" icon="➕" onClick={openCreate} disabled={readOnly} />
           <Tab id="students" label="Students" icon="👥" />
           <Tab id="teachers" label="Teachers" icon="🧑‍🏫" />
         </div>
-        {tab === 'tests' && <MyTests onEdit={openEdit} />}
-        {tab === 'create' && <TestBuilder key={editTestId || 'new'} editId={editTestId} onSaved={afterSave} onCancel={() => { setEditTestId(null); setTab('tests'); }} />}
-        {tab === 'students' && <StudentsTab />}
-        {tab === 'teachers' && <TeachersTab />}
+        {tab === 'tests' && <MyTests onEdit={openEdit} readOnly={readOnly} />}
+        {tab === 'create' && !readOnly && <TestBuilder key={editTestId || 'new'} editId={editTestId} onSaved={afterSave} onCancel={() => { setEditTestId(null); setTab('tests'); }} />}
+        {tab === 'students' && <StudentsTab readOnly={readOnly} />}
+        {tab === 'teachers' && <TeachersTab readOnly={readOnly} />}
       </div>
       {showProfile && <ProfileModal me={me} onClose={() => setShowProfile(false)} />}
     </>
