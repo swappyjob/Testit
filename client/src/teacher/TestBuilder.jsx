@@ -25,6 +25,8 @@ export default function TestBuilder({ editId, onSaved, onCancel }) {
   const [durationMinutes, setDurationMinutes] = useState('');
   const [negativeMarking, setNegativeMarking] = useState(false);
   const [penalty, setPenalty] = useState(1);
+  const [proctored, setProctored] = useState(false);
+  const [maxViolations, setMaxViolations] = useState(3);
   const [sections, setSections] = useState([]); // e.g. ['Quantitative Aptitude', 'Physics']
   const [newSection, setNewSection] = useState('');
   const [questions, setQuestions] = useState([blankQuestion('multi')]);
@@ -39,6 +41,8 @@ export default function TestBuilder({ editId, onSaved, onCancel }) {
       setDurationMinutes(test.duration_minutes || '');
       setNegativeMarking(!!test.negative_marking);
       setPenalty(test.penalty > 0 ? test.penalty : 1);
+      setProctored(!!test.proctored);
+      setMaxViolations(test.max_violations > 0 ? test.max_violations : 3);
       const qs = questions.map((q) => ({
         type: q.type,
         prompt: q.prompt,
@@ -113,7 +117,9 @@ export default function TestBuilder({ editId, onSaved, onCancel }) {
     const payload = {
       title, description, dueDate,
       durationMinutes: Number(durationMinutes) || 0,
-      negativeMarking, penalty, questions: clean,
+      negativeMarking, penalty,
+      proctored, maxViolations: Number(maxViolations) || 3,
+      questions: clean,
     };
     try {
       if (editId) await api('/api/tests/' + editId, 'PUT', payload);
@@ -155,6 +161,22 @@ export default function TestBuilder({ editId, onSaved, onCancel }) {
             <input type="number" min="1" step="1" value={penalty} onChange={(e) => setPenalty(Number(e.target.value) || 1)} style={{ width: 120 }} />
             <p className="muted" style={{ fontSize: 13, margin: '6px 0 0' }}>
               Applies to multiple-choice, multiple-answer &amp; true/false questions. Blank answers are never penalized. A student's total can go negative.
+            </p>
+          </div>
+        )}
+      </div>
+
+      <div className="q-card" style={{ marginTop: 16 }}>
+        <label className="choice" style={{ fontWeight: 600 }}>
+          <input type="checkbox" checked={proctored} onChange={(e) => setProctored(e.target.checked)} />
+          🔒 Enable proctoring (fullscreen + anti-cheating monitoring)
+        </label>
+        {proctored && (
+          <div style={{ marginTop: 8 }}>
+            <label>Auto-submit after this many violations</label>
+            <input type="number" min="1" step="1" value={maxViolations} onChange={(e) => setMaxViolations(Number(e.target.value) || 1)} style={{ width: 120 }} />
+            <p className="muted" style={{ fontSize: 13, margin: '6px 0 0' }}>
+              The test runs in fullscreen. Switching tabs/windows or leaving fullscreen is warned and counted; copy, paste and right-click are blocked. After this many violations the test auto-submits. Every violation is recorded for you to review. (Browser measures deter casual cheating but can't stop a second device or another person.)
             </p>
           </div>
         )}

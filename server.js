@@ -841,6 +841,11 @@ function readDuration(body) {
   const d = Math.round(Number(body.durationMinutes));
   return Number.isFinite(d) && d > 0 ? d : 0;
 }
+function readProctoring(body) {
+  const proctored = body.proctored ? 1 : 0;
+  const n = Math.round(Number(body.maxViolations));
+  return { proctored, maxViolations: Number.isFinite(n) && n >= 1 ? n : 3 };
+}
 
 app.post('/api/tests', requireAuth('teacher'), requireActiveSubscription, h(async (req, res) => {
   const title = (req.body.title || '').trim();
@@ -852,11 +857,12 @@ app.post('/api/tests', requireAuth('teacher'), requireActiveSubscription, h(asyn
   const { negative_marking, penalty } = readMarking(req.body);
   const dueDate = readDueDate(req.body);
   const duration = readDuration(req.body);
+  const { proctored, maxViolations } = readProctoring(req.body);
 
   const testId = await tx(async (t) => {
     const newId = (await t.run(
-      'INSERT INTO tests (teacher_id, title, description, negative_marking, penalty, due_date, duration_minutes) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id',
-      [req.user.id, title, description, negative_marking, penalty, dueDate, duration]
+      'INSERT INTO tests (teacher_id, title, description, negative_marking, penalty, due_date, duration_minutes, proctored, max_violations) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
+      [req.user.id, title, description, negative_marking, penalty, dueDate, duration, proctored, maxViolations]
     )).rows[0].id;
     await writeQuestions(t.run, newId, questions);
     return newId;
@@ -877,6 +883,7 @@ app.put('/api/tests/:id', requireAuth('teacher'), requireActiveSubscription, h(a
   const { negative_marking, penalty } = readMarking(req.body);
   const dueDate = readDueDate(req.body);
   const duration = readDuration(req.body);
+  const { proctored, maxViolations } = readProctoring(req.body);
 
   const keptAttempts = await tx(async (t) => {
     // Archive any answered current question (so old results keep their exact
@@ -888,8 +895,8 @@ app.put('/api/tests/:id', requireAuth('teacher'), requireActiveSubscription, h(a
       else await t.run('DELETE FROM questions WHERE id = ?', [q.id]);
     }
     await t.run(
-      'UPDATE tests SET title = ?, description = ?, negative_marking = ?, penalty = ?, due_date = ?, duration_minutes = ? WHERE id = ?',
-      [title, description, negative_marking, penalty, dueDate, duration, test.id]
+      'UPDATE tests SET title = ?, description = ?, negative_marking = ?, penalty = ?, due_date = ?, duration_minutes = ?, proctored = ?, max_violations = ? WHERE id = ?',
+      [title, description, negative_marking, penalty, dueDate, duration, proctored, maxViolations, test.id]
     );
     await writeQuestions(t.run, test.id, questions);
     return (await t.get("SELECT COUNT(*) AS c FROM attempts WHERE test_id = ? AND submitted_at IS NOT NULL", [test.id])).c;
@@ -1003,7 +1010,7 @@ app.get('/api/take/:assignmentId', requireAuth('student'), h(async (req, res) =>
   if (attempt && attempt.submitted_at)
     return res.status(409).json({ error: 'You have already submitted this test.' });
 
-  const test = await get('SELECT id, title, description, negative_marking, penalty, due_date, duration_minutes FROM tests WHERE id = ?', [a.test_id]);
+  const test = await get('SELECT id, title, description, negative_marking, penalty, due_date, duration_minutes, proctored, max_violations FROM tests WHERE id = ?', [a.test_id]);
   if (isClosed(test.due_date))
     return res.status(403).json({ error: 'The deadline for this test has passed. You can no longer take it.' });
 
@@ -1041,6 +1048,7 @@ app.post('/api/submit/:assignmentId', requireAuth('student'), h(async (req, res)
     return res.status(403).json({ error: 'The deadline for this test has passed. Your submission was not accepted.' });
   const questions = await all('SELECT * FROM questions WHERE test_id = ? AND archived = 0 ORDER BY position', [a.test_id]);
   const responses = req.body.answers || {}; // { questionId: response }
+  const violations = Math.max(0, Math.round(Number(req.body.violations)) || 0); // proctoring events
 
   let autoScore = 0;
   let maxScore = 0;
@@ -1090,14 +1098,14 @@ app.post('/api/submit/:assignmentId', requireAuth('student'), h(async (req, res)
       // Finalize the in-progress (timed) attempt.
       attemptId = existing.id;
       await t.run(
-        'UPDATE attempts SET submitted_at = NOW(), auto_score = ?, manual_score = 0, max_score = ?, needs_grading = ? WHERE id = ?',
-        [autoScore, maxScore, needsGrading, attemptId]
+        'UPDATE attempts SET submitted_at = NOW(), auto_score = ?, manual_score = 0, max_score = ?, needs_grading = ?, violations = ? WHERE id = ?',
+        [autoScore, maxScore, needsGrading, violations, attemptId]
       );
     } else {
       attemptId = (await t.run(
-        `INSERT INTO attempts (assignment_id, test_id, student_id, submitted_at, auto_score, manual_score, max_score, needs_grading)
-         VALUES (?, ?, ?, NOW(), ?, 0, ?, ?) RETURNING id`,
-        [a.id, a.test_id, req.user.id, autoScore, maxScore, needsGrading]
+        `INSERT INTO attempts (assignment_id, test_id, student_id, submitted_at, auto_score, manual_score, max_score, needs_grading, violations)
+         VALUES (?, ?, ?, NOW(), ?, 0, ?, ?, ?) RETURNING id`,
+        [a.id, a.test_id, req.user.id, autoScore, maxScore, needsGrading, violations]
       )).rows[0].id;
     }
     for (const g of graded) {
@@ -1118,13 +1126,14 @@ app.get('/api/tests/:id/results', requireAuth('teacher'), h(async (req, res) => 
   if (!test) return res.status(404).json({ error: 'Test not found.' });
   const rows = await all(
     `SELECT at.id AS attempt_id, u.name, u.email, at.submitted_at,
-            at.auto_score, at.manual_score, at.max_score, at.needs_grading
+            at.auto_score, at.manual_score, at.max_score, at.needs_grading, at.violations
        FROM attempts at JOIN users u ON u.id = at.student_id
       WHERE at.test_id = ? AND at.submitted_at IS NOT NULL
       ORDER BY at.submitted_at DESC`,
     [test.id]
   );
   res.json({
+    proctored: !!test.proctored,
     results: rows.map((r) => ({
       attemptId: r.attempt_id,
       name: r.name,
@@ -1133,6 +1142,7 @@ app.get('/api/tests/:id/results', requireAuth('teacher'), h(async (req, res) => 
       score: r.auto_score + r.manual_score,
       maxScore: r.max_score,
       needsGrading: !!r.needs_grading,
+      violations: r.violations || 0,
     })),
   });
 }));
@@ -1177,6 +1187,7 @@ app.get('/api/attempts/:attemptId', requireAuth('teacher'), h(async (req, res) =
       manualScore: attempt.manual_score,
       maxScore: attempt.max_score,
       needsGrading: !!attempt.needs_grading,
+      violations: attempt.violations || 0,
     },
     items,
   });

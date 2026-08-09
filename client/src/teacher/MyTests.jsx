@@ -107,7 +107,8 @@ function AssignPanel({ test, onChanged }) {
 
 function ResultsPanel({ test, onGrade }) {
   const [results, setResults] = useState(null);
-  useEffect(() => { api('/api/tests/' + test.id + '/results').then((d) => setResults(d.results)); }, [test.id]);
+  const [proctored, setProctored] = useState(false);
+  useEffect(() => { api('/api/tests/' + test.id + '/results').then((d) => { setResults(d.results); setProctored(!!d.proctored); }); }, [test.id]);
   return (
     <div className="card">
       <h2>Results — "{test.title}"</h2>
@@ -115,12 +116,13 @@ function ResultsPanel({ test, onGrade }) {
         <p className="muted">No students have submitted this test yet.</p>
       ) : (
         <table>
-          <thead><tr><th>Student</th><th>Score</th><th>Status</th><th></th></tr></thead>
+          <thead><tr><th>Student</th><th>Score</th>{proctored && <th>Proctoring</th>}<th>Status</th><th></th></tr></thead>
           <tbody>
             {results.map((r) => (
               <tr key={r.attemptId}>
                 <td>{r.name}<div className="muted" style={{ fontSize: 12 }}>{r.email}</div></td>
                 <td><b>{r.score}</b> / {r.maxScore}</td>
+                {proctored && <td>{r.violations > 0 ? <span className="pill amber">⚠ {r.violations} violation{r.violations === 1 ? '' : 's'}</span> : <span className="pill green">clean</span>}</td>}
                 <td>{r.needsGrading ? <span className="pill amber">needs grading</span> : <span className="pill green">graded</span>}</td>
                 <td><button className="btn secondary small" onClick={() => onGrade(r.attemptId)}>View / Grade</button></td>
               </tr>
@@ -174,6 +176,7 @@ function AttemptPanel({ test, attemptId, onBack, readOnly }) {
       <p className="muted">
         Score: <b>{attempt.autoScore + attempt.manualScore}</b> / {attempt.maxScore}
         {attempt.needsGrading ? <> · <span className="pill amber">has answers to grade</span></> : null}
+        {attempt.violations > 0 ? <> · <span className="pill amber">⚠ {attempt.violations} proctoring violation{attempt.violations === 1 ? '' : 's'}</span></> : null}
       </p>
       {hasSections && (
         <table style={{ maxWidth: 420, marginBottom: 12 }}>
