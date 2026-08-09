@@ -46,6 +46,8 @@ export default function AdminDashboard() {
           <input type="text" value={query} onChange={(e) => onSearch(e.target.value)} placeholder="🔍 Search organizations by name..." style={{ marginTop: 14 }} />
         </div>
 
+        <AdminsCard />
+
         {plans.length > 0 && (
           <div className="card">
             <h2>Pricing plans</h2>
@@ -77,6 +79,46 @@ export default function AdminDashboard() {
       {editingTeacher && <EditTeacherModal teacher={editingTeacher} onClose={() => setEditingTeacher(null)} onSaved={() => { setEditingTeacher(null); load(query); }} />}
       {showProfile && <ProfileModal me={me} onClose={() => setShowProfile(false)} />}
     </>
+  );
+}
+
+// Platform admins: list and create additional admins.
+function AdminsCard() {
+  const [admins, setAdmins] = useState(null);
+  const [form, setForm] = useState({ name: '', email: '', password: '' });
+  const [msg, setMsg] = useState(null);
+  const load = () => api('/api/admins').then((d) => setAdmins(d.admins)).catch(() => {});
+  useEffect(() => { load(); }, []);
+  async function addAdmin() {
+    try {
+      await api('/api/admins', 'POST', form);
+      setForm({ name: '', email: '', password: '' });
+      setMsg({ ok: true, text: 'Administrator created. They can log in at the admin login with this email and password.' });
+      load();
+    } catch (e) { setMsg({ ok: false, text: e.message }); }
+  }
+  return (
+    <div className="card">
+      <h2>Administrators</h2>
+      <p className="muted">Platform admins manage every organization. Add another admin here.</p>
+      {msg && <Msg text={msg.text} kind={msg.ok ? 'ok' : 'error'} />}
+      {admins && admins.length > 0 && (
+        <table>
+          <thead><tr><th>Name</th><th>Email</th></tr></thead>
+          <tbody>
+            {admins.map((a) => (
+              <tr key={a.id}><td>{a.name}{a.isSelf && <span className="muted"> (you)</span>}</td><td>{a.email}</td></tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <div className="grid two" style={{ marginTop: 14 }}>
+        <div><label>Name</label><input type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></div>
+        <div><label>Email</label><input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></div>
+        <div><label>Temporary password (min 6 characters)</label><PasswordInput value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></div>
+      </div>
+      <div style={{ marginTop: 14 }}><button className="btn" onClick={addAdmin}>Create administrator</button></div>
+    </div>
   );
 }
 

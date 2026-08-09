@@ -46,6 +46,31 @@ if ((await call(rando, '/api/admin/root-teachers', 'POST', { orgId: 1, name: 'x'
   throw new Error('teacher should be 403 creating root teachers');
 ok('non-admin is blocked from admin endpoints (403)');
 
+// --- An admin can create other admins ---
+if ((await call(rando, '/api/admins', 'GET', undefined, false)).status !== 403) throw new Error('teacher should be 403 on GET /api/admins');
+if ((await call(rando, '/api/admins', 'POST', { name: 'X', email: `nx${rand}@x.com`, password: 'secret123' }, false)).status !== 403)
+  throw new Error('teacher should be 403 creating admins');
+ok('non-admin cannot list or create admins (403)');
+
+const adminsBefore = (await call(admin, '/api/admins')).data.admins;
+if (!adminsBefore.find((a) => a.email === adminEmail && a.isSelf)) throw new Error('admin list should include self');
+const newAdminEmail = `admin2_${rand}@x.com`;
+if ((await call(admin, '/api/admins', 'POST', { name: 'Second Admin', email: newAdminEmail, password: 'admin2pass' })).status !== 200)
+  throw new Error('admin should be able to create another admin');
+ok('an admin can create another admin');
+
+const admin2 = makeJar();
+const a2 = (await call(admin2, '/api/login', 'POST', { email: newAdminEmail, password: 'admin2pass' })).data.user;
+if (a2.role !== 'admin') throw new Error('new admin login role wrong');
+if ((await call(admin2, '/api/admins')).status !== 200) throw new Error('new admin should reach admin endpoints');
+ok('the new admin can log in and use admin endpoints');
+
+if ((await call(admin, '/api/admins', 'POST', { name: 'Dup', email: newAdminEmail, password: 'another1' }, false)).status !== 409)
+  throw new Error('duplicate admin email should be 409');
+if ((await call(admin, '/api/admins', 'POST', { name: 'Short', email: `sp${rand}@x.com`, password: '123' }, false)).status !== 400)
+  throw new Error('short admin password should be 400');
+ok('duplicate email (409) and short password (400) rejected');
+
 // Admin creates two organizations.
 const orgA = (await call(admin, '/api/orgs', 'POST', { name: `Org A ${rand}` })).data;
 const orgB = (await call(admin, '/api/orgs', 'POST', { name: `Org B ${rand}` })).data;

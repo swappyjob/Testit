@@ -556,6 +556,29 @@ app.put('/api/orgs/:id/subscription', requireAdmin, h(async (req, res) => {
   res.json({ ok: true, expiresAt: raw, expired: isExpired(raw) });
 }));
 
+// List the platform admins.
+app.get('/api/admins', requireAdmin, h(async (req, res) => {
+  const admins = await all("SELECT id, name, email FROM users WHERE role = 'admin' ORDER BY id");
+  res.json({ admins: admins.map((a) => ({ id: a.id, name: a.name, email: a.email, isSelf: a.id === req.user.id })) });
+}));
+
+// An admin creates another platform admin.
+app.post('/api/admins', requireAdmin, h(async (req, res) => {
+  const name = (req.body.name || '').trim();
+  const email = (req.body.email || '').trim().toLowerCase();
+  const password = req.body.password || '';
+  if (!name || !email) return res.status(400).json({ error: 'Name and email are required.' });
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: 'Enter a valid email address.' });
+  if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters.' });
+  if (await get('SELECT id FROM users WHERE email = ?', [email]))
+    return res.status(409).json({ error: 'That email is already in use.' });
+  const id = (await run(
+    "INSERT INTO users (role, name, email, password_hash) VALUES ('admin', ?, ?, ?) RETURNING id",
+    [name, email, hashPassword(password)]
+  )).rows[0].id;
+  res.json({ id, name, email });
+}));
+
 // A teacher views their own organization's current plan, usage, and all plans.
 app.get('/api/my-org/plan', requireAuth('teacher'), h(async (req, res) => {
   const plan = await get(
