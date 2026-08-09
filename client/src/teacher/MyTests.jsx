@@ -240,6 +240,11 @@ function AttemptPanel({ test, attemptId, onBack, readOnly }) {
               </div>
             </div>
           )}
+          {it.explanation && (
+            <div className="msg" style={{ background: '#eef2ff', color: 'var(--brand-dark)', marginTop: 10 }}>
+              <b>💡 Explanation:</b> {it.explanation}
+            </div>
+          )}
         </div>
       ))}
       {hasShort && !readOnly && <div style={{ marginTop: 8 }}><button className="btn" onClick={saveGrades}>Save grades</button></div>}

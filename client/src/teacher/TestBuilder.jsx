@@ -10,6 +10,7 @@ const blankQuestion = (type) => ({
   points: 1,
   image: '',
   section: '',
+  explanation: '',
 });
 const TYPE_LABEL = { mcq: 'Multiple choice', multi: 'Multiple answers', truefalse: 'True / False', short: 'Short answer' };
 
@@ -53,6 +54,7 @@ export default function TestBuilder({ editId, onSaved, onCancel }) {
         points: q.points,
         image: q.image_url || '',
         section: q.section || '',
+        explanation: q.explanation || '',
       }));
       setQuestions(qs);
       // Rebuild the section list from whatever sections the questions use (in order of first appearance).
@@ -281,6 +283,9 @@ export default function TestBuilder({ editId, onSaved, onCancel }) {
           )}
           <label>Points</label>
           <input type="number" min="1" value={q.points} onChange={(e) => updateQ(i, { points: Number(e.target.value) || 1 })} style={{ width: 100 }} />
+
+          <label>Explanation for the correct answer (optional)</label>
+          <textarea value={q.explanation} onChange={(e) => updateQ(i, { explanation: e.target.value })} placeholder="Explain why the correct answer is right. Shown to students when they review the test." />
         </div>
       ))}
 

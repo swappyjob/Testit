@@ -197,6 +197,8 @@ async function init() {
   // Forward-compatible column additions for databases created earlier.
   await pool.query('ALTER TABLE tests ADD COLUMN IF NOT EXISTS duration_minutes INTEGER NOT NULL DEFAULT 0');
   await pool.query("ALTER TABLE questions ADD COLUMN IF NOT EXISTS section TEXT NOT NULL DEFAULT ''");
+  // Optional teacher explanation of the correct answer, shown to students in review.
+  await pool.query("ALTER TABLE questions ADD COLUMN IF NOT EXISTS explanation TEXT NOT NULL DEFAULT ''");
   // Proctoring: per-test lockdown + how many tab-switch/fullscreen-exit violations
   // are allowed before the attempt auto-submits. Per-attempt violation count.
   await pool.query('ALTER TABLE tests ADD COLUMN IF NOT EXISTS proctored INTEGER NOT NULL DEFAULT 0');

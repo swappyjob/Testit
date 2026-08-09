@@ -36,7 +36,7 @@ const teacher = makeJar();
 await call(teacher, '/api/register-teacher', 'POST', { name: 'R', email: `r${rand}@x.com`, password: 'secret123' });
 const { id: testId } = (await call(teacher, '/api/tests', 'POST', {
   title: 'Reviewable', questions: [
-    { type: 'multi', prompt: 'Pick A', options: ['A', 'B'], correct: [0], points: 1 },
+    { type: 'multi', prompt: 'Pick A', options: ['A', 'B'], correct: [0], points: 1, explanation: 'A is the right choice because it is first.' },
     { type: 'truefalse', prompt: 'Sky is green', correct: 'false', points: 1 },
     { type: 'short', prompt: 'Say hi', points: 1 },
   ],
@@ -66,6 +66,7 @@ const rev = (await call(s1.jar, '/api/my-review/' + aid)).data;
 if (rev.items.length !== 3) throw new Error('review should return all 3 questions');
 const multi = rev.items.find((i) => i.prompt === 'Pick A');
 if (multi.response !== '[0]' || multi.correctAnswer !== '[0]' || multi.isCorrect !== 1) throw new Error('multi review wrong');
+if (multi.explanation !== 'A is the right choice because it is first.') throw new Error('explanation not returned in review');
 const tf = rev.items.find((i) => i.prompt === 'Sky is green');
 if (tf.response !== 'true' || tf.correctAnswer !== 'false' || tf.isCorrect !== 0) throw new Error('true/false review wrong');
 const short = rev.items.find((i) => i.prompt === 'Say hi');

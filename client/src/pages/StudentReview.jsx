@@ -68,6 +68,11 @@ export default function StudentReview() {
               {it.type !== 'short' && (
                 <div className="muted" style={{ marginTop: 4 }}>Correct answer: {correct}</div>
               )}
+              {it.explanation && (
+                <div className="msg" style={{ background: '#eef2ff', color: 'var(--brand-dark)', marginTop: 10 }}>
+                  <b>💡 Explanation:</b> {it.explanation}
+                </div>
+              )}
             </div>
           );
         })}

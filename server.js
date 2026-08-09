@@ -800,10 +800,11 @@ async function writeQuestions(runFn, testId, questions) {
     }
     const points = Number(q.points) > 0 ? Number(q.points) : 1;
     const section = typeof q.section === 'string' ? q.section.trim().slice(0, 100) : '';
+    const explanation = typeof q.explanation === 'string' ? q.explanation.trim() : '';
     await runFn(
-      `INSERT INTO questions (test_id, type, prompt, options_json, correct_answer, image_url, points, position, section)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [testId, q.type, q.prompt.trim(), options, correct, safeImageUrl(q.image), points, idx, section]
+      `INSERT INTO questions (test_id, type, prompt, options_json, correct_answer, image_url, points, position, section, explanation)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [testId, q.type, q.prompt.trim(), options, correct, safeImageUrl(q.image), points, idx, section, explanation]
     );
   }
 }
@@ -1021,7 +1022,7 @@ app.get('/api/my-review/:assignmentId', requireAuth('student'), h(async (req, re
   const test = await get('SELECT title FROM tests WHERE id = ?', [a.test_id]);
   const items = (await all(
     `SELECT ans.response, ans.is_correct, ans.points_awarded,
-            q.type, q.prompt, q.options_json, q.correct_answer, q.image_url, q.points, q.section
+            q.type, q.prompt, q.options_json, q.correct_answer, q.image_url, q.points, q.section, q.explanation
        FROM answers ans JOIN questions q ON q.id = ans.question_id
       WHERE ans.attempt_id = ? ORDER BY q.position`,
     [attempt.id]
@@ -1030,6 +1031,7 @@ app.get('/api/my-review/:assignmentId', requireAuth('student'), h(async (req, re
     options: JSON.parse(r.options_json), response: r.response,
     correctAnswer: r.correct_answer, isCorrect: r.is_correct,
     pointsAwarded: r.points_awarded, points: r.points, image: r.image_url,
+    explanation: r.explanation,
   }));
   res.json({
     test: { title: test.title },
@@ -1197,7 +1199,7 @@ app.get('/api/attempts/:attemptId', requireAuth('teacher'), h(async (req, res) =
   if (!attempt) return res.status(404).json({ error: 'Attempt not found.' });
   const items = (await all(
     `SELECT ans.id AS answer_id, ans.response, ans.is_correct, ans.points_awarded,
-            q.id AS question_id, q.type, q.prompt, q.options_json, q.correct_answer, q.image_url, q.points, q.section
+            q.id AS question_id, q.type, q.prompt, q.options_json, q.correct_answer, q.image_url, q.points, q.section, q.explanation
        FROM answers ans JOIN questions q ON q.id = ans.question_id
       WHERE ans.attempt_id = ? ORDER BY q.position`,
     [attempt.id]
@@ -1214,6 +1216,7 @@ app.get('/api/attempts/:attemptId', requireAuth('teacher'), h(async (req, res) =
     correctAnswer: r.correct_answer,
     image: r.image_url,
     points: r.points,
+    explanation: r.explanation,
   }));
   res.json({
     attempt: {
