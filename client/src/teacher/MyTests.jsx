@@ -1,13 +1,16 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { api } from '../api.js';
 import { Msg, fmtDateTime } from '../components.jsx';
 
 export default function MyTests({ onEdit, readOnly }) {
   const [tests, setTests] = useState(null);
   const [detail, setDetail] = useState(null); // { kind:'assign'|'results'|'attempt', test, attemptId }
+  const detailRef = useRef(null);
 
   const load = () => api('/api/tests').then((d) => setTests(d.tests));
   useEffect(() => { load(); }, []);
+  // Bring the inline panel into view when it opens (in case it sits below the fold).
+  useEffect(() => { if (detail && detailRef.current) detailRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }, [detail]);
 
   async function del(t) {
     if (!window.confirm(`Delete "${t.title}"? This removes its questions and results.`)) return;
@@ -15,6 +18,9 @@ export default function MyTests({ onEdit, readOnly }) {
     setDetail(null);
     load();
   }
+  // Open a panel for a test, or close it if that same panel is already open (toggle).
+  const toggle = (kind, t) => setDetail((d) => (d && d.test.id === t.id && d.kind === kind ? null : { kind, test: t }));
+  const isOpen = (kind, t) => detail && detail.test.id === t.id && detail.kind === kind;
 
   if (tests === null) return <div className="card"><p className="muted">Loading…</p></div>;
 
@@ -23,8 +29,10 @@ export default function MyTests({ onEdit, readOnly }) {
       <div className="card">
         <h1>My Tests</h1>
         {tests.length === 0 && <p className="muted">No tests yet. Go to <b>Create Test</b> to make your first one.</p>}
-        {tests.map((t) => (
-          <div className="list-item" key={t.id}>
+      </div>
+      {tests.map((t) => (
+        <div key={t.id}>
+          <div className="list-item">
             <div>
               <h3>
                 {t.title}{' '}
@@ -39,17 +47,20 @@ export default function MyTests({ onEdit, readOnly }) {
             </div>
             <div className="row">
               <button className="btn secondary small" disabled={readOnly} onClick={() => onEdit(t.id)}>Edit</button>
-              <button className="btn small" disabled={readOnly} onClick={() => setDetail({ kind: 'assign', test: t })}>Assign</button>
-              <button className="btn secondary small" onClick={() => setDetail({ kind: 'results', test: t })}>Results</button>
+              <button className="btn small" disabled={readOnly} onClick={() => toggle('assign', t)}>{isOpen('assign', t) ? 'Close' : 'Assign'}</button>
+              <button className="btn secondary small" onClick={() => toggle('results', t)}>{isOpen('results', t) || isOpen('attempt', t) ? 'Close' : 'Results'}</button>
               <button className="btn danger small" disabled={readOnly} onClick={() => del(t)}>Delete</button>
             </div>
           </div>
-        ))}
-      </div>
-
-      {detail?.kind === 'assign' && <AssignPanel test={detail.test} onChanged={load} />}
-      {detail?.kind === 'results' && <ResultsPanel test={detail.test} onGrade={(attemptId) => setDetail({ kind: 'attempt', test: detail.test, attemptId })} />}
-      {detail?.kind === 'attempt' && <AttemptPanel test={detail.test} attemptId={detail.attemptId} readOnly={readOnly} onBack={() => setDetail({ kind: 'results', test: detail.test })} />}
+          {detail && detail.test.id === t.id && (
+            <div ref={detailRef} style={{ margin: '-4px 0 16px' }}>
+              {detail.kind === 'assign' && <AssignPanel test={t} onChanged={load} />}
+              {detail.kind === 'results' && <ResultsPanel test={t} onGrade={(attemptId) => setDetail({ kind: 'attempt', test: t, attemptId })} />}
+              {detail.kind === 'attempt' && <AttemptPanel test={t} attemptId={detail.attemptId} readOnly={readOnly} onBack={() => setDetail({ kind: 'results', test: t })} />}
+            </div>
+          )}
+        </div>
+      ))}
     </>
   );
 }
