@@ -106,8 +106,7 @@ function StatsBar({ onNavigate }) {
     ]).then(([tests, students, teachers]) => {
       if (!alive) return;
       const signedUpStudents = students.filter((x) => x.signedUp).length;
-      const assigned = tests.reduce((n, t) => n + (t.assigned_count || 0), 0);
-      setS({ tests: tests.length, students: signedUpStudents || students.length, teachers: teachers.length, assigned });
+      setS({ tests: tests.length, students: signedUpStudents || students.length, teachers: teachers.length });
     });
     return () => { alive = false; };
   }, []);
@@ -116,7 +115,6 @@ function StatsBar({ onNavigate }) {
     { ic: '📝', n: s.tests, l: 'Tests', to: 'tests' },
     { ic: '👥', n: s.students, l: 'Students', to: 'students' },
     { ic: '🧑‍🏫', n: s.teachers, l: 'Teachers', to: 'teachers' },
-    { ic: '📌', n: s.assigned, l: 'Assignments', to: 'tests' },
   ];
   return (
     <div className="stats">
