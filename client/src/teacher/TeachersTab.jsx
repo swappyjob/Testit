@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api.js';
-import { Msg } from '../components.jsx';
+import { Msg, Modal } from '../components.jsx';
 
 export default function TeachersTab({ readOnly }) {
   const [data, setData] = useState(null); // { teachers, canManage }
   const [form, setForm] = useState({ name: '', email: '', phone: '', role: 'teacher' });
+  const [editing, setEditing] = useState(null); // teacher row being edited
   const [msg, setMsg] = useState(null);
 
   const load = () => api('/api/teachers').then(setData);
@@ -76,10 +77,16 @@ export default function TeachersTab({ readOnly }) {
                       <>
                         <span className="pill amber">invite pending</span>{' '}
                         <button className="btn secondary small" style={{ marginLeft: 6 }} onClick={(e) => copy(window.location.origin + t.signupPath, e.target)}>Copy link</button>
+                        {canManage && !readOnly && (
+                          <button className="btn ghost small" style={{ marginLeft: 8 }} onClick={() => setEditing(t)}>Edit</button>
+                        )}
                       </>
                     ) : (
                       <>
                         {t.disabled ? <span className="pill gray">disabled</span> : <span className="pill green">active</span>}
+                        {canManage && !readOnly && (
+                          <button className="btn ghost small" style={{ marginLeft: 8 }} onClick={() => setEditing(t)}>Edit</button>
+                        )}
                         {canManage && !readOnly && !t.isSelf && (
                           <>
                             <button className={`btn ${t.disabled ? 'secondary' : 'danger'} small`} style={{ marginLeft: 8 }} onClick={() => toggle(t)}>{t.disabled ? 'Enable' : 'Disable'}</button>
@@ -95,6 +102,43 @@ export default function TeachersTab({ readOnly }) {
           </table>
         )}
       </div>
+
+      {editing && <EditTeacherModal teacher={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} />}
     </>
+  );
+}
+
+const tokenFromPath = (p) => { try { return new URLSearchParams((p || '').split('?')[1]).get('token'); } catch { return null; } };
+
+function EditTeacherModal({ teacher, onClose, onSaved }) {
+  const [name, setName] = useState(teacher.name);
+  const [phone, setPhone] = useState(teacher.phone || '');
+  const [role, setRole] = useState(teacher.isRoot ? 'root' : 'teacher');
+  const [msg, setMsg] = useState('');
+  async function save() {
+    try {
+      const body = { name, phone, isRoot: role === 'root' };
+      if (teacher.signedUp) await api('/api/teachers/' + teacher.id, 'PUT', body);
+      else await api('/api/teacher-invites/' + tokenFromPath(teacher.signupPath), 'PUT', body);
+      onSaved();
+    } catch (e) { setMsg(e.message); }
+  }
+  return (
+    <Modal title={teacher.signedUp ? 'Edit teacher' : 'Edit invited teacher'} onClose={onClose}>
+      <Msg text={msg} />
+      <label>Name</label><input type="text" value={name} onChange={(e) => setName(e.target.value)} />
+      <label>Email (cannot be changed)</label><input type="email" value={teacher.email} disabled />
+      <label>Phone number</label><input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="e.g. +91 98765 43210" />
+      <label>Role</label>
+      <select value={role} onChange={(e) => setRole(e.target.value)} disabled={teacher.isSelf}>
+        <option value="teacher">Teacher (create/assign/edit tests)</option>
+        <option value="root">Root teacher (also manages teachers)</option>
+      </select>
+      {teacher.isSelf && <p className="muted" style={{ fontSize: 13 }}>You can't change your own role.</p>}
+      <div className="row" style={{ marginTop: 18 }}>
+        <button className="btn" onClick={save}>Save changes</button>
+        <button className="btn ghost" onClick={onClose}>Cancel</button>
+      </div>
+    </Modal>
   );
 }

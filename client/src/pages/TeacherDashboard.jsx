@@ -129,7 +129,8 @@ function StatsBar() {
 }
 
 function ProfileModal({ me, onClose, initialPane = 'account' }) {
-  const [pane, setPane] = useState(initialPane);
+  // Only root teachers get the Subscription pane.
+  const [pane, setPane] = useState(me.isRoot ? initialPane : 'account');
   const [cur, setCur] = useState('');
   const [nw, setNw] = useState('');
   const [confirm, setConfirm] = useState('');
@@ -146,10 +147,12 @@ function ProfileModal({ me, onClose, initialPane = 'account' }) {
   return (
     <Modal title="Profile" onClose={onClose} wide>
       <p className="muted">{me.name} · {me.email}</p>
-      <div className="tabs" style={{ marginTop: 10, marginBottom: 18 }}>
-        <button className={'tab' + (pane === 'account' ? ' active' : '')} onClick={() => setPane('account')}>🔒 Account</button>
-        <button className={'tab' + (pane === 'subscription' ? ' active' : '')} onClick={() => setPane('subscription')}>💳 Subscription</button>
-      </div>
+      {me.isRoot && (
+        <div className="tabs" style={{ marginTop: 10, marginBottom: 18 }}>
+          <button className={'tab' + (pane === 'account' ? ' active' : '')} onClick={() => setPane('account')}>🔒 Account</button>
+          <button className={'tab' + (pane === 'subscription' ? ' active' : '')} onClick={() => setPane('subscription')}>💳 Subscription</button>
+        </div>
+      )}
 
       {pane === 'account' && (
         <>

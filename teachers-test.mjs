@@ -128,6 +128,26 @@ if ((await call(normal, '/api/my-org/plan', 'POST', { planId: basicP.id }, false
   throw new Error('normal teacher changing the plan should be 403');
 ok('normal teacher can view but not change the subscription');
 
+// --- Root edits teachers and pending invites (except email) ---
+const ntId = (await call(root, '/api/teachers')).data.teachers.find((t) => t.email === `nt${rand}@x.com`).id;
+if ((await call(root, '/api/teachers/' + ntId, 'PUT', { name: 'Normal Edited', phone: '9111111111', isRoot: false })).status !== 200)
+  throw new Error('root should edit a signed-up teacher');
+const editedT = (await call(root, '/api/teachers')).data.teachers.find((t) => t.email === `nt${rand}@x.com`);
+if (editedT.name !== 'Normal Edited' || editedT.phone !== '9111111111') throw new Error('signed-up teacher edit did not persist');
+ok('root edits a signed-up teacher (name/phone)');
+
+const invite = (await call(root, '/api/teachers')).data.teachers.find((t) => t.email === `an${rand}@x.com`);
+const invToken = new URLSearchParams(invite.signupPath.split('?')[1]).get('token');
+if ((await call(root, '/api/teacher-invites/' + invToken, 'PUT', { name: 'Invite Edited', phone: '9222222222', isRoot: true })).status !== 200)
+  throw new Error('root should edit a pending invite');
+const invAfter = (await call(root, '/api/teachers')).data.teachers.find((t) => t.email === `an${rand}@x.com`);
+if (invAfter.name !== 'Invite Edited' || !invAfter.isRoot) throw new Error('pending invite edit did not persist');
+ok('root edits a pending teacher invite (name/phone/role)');
+
+if ((await call(normal, '/api/teachers/' + ntId, 'PUT', { name: 'X', phone: '9000000000', isRoot: false }, false)).status !== 403)
+  throw new Error('a normal teacher editing a teacher should be 403');
+ok('a normal teacher cannot edit teachers (403)');
+
 // --- Disabling teachers (root only) ---
 const normalId = (await call(root, '/api/teachers')).data.teachers.find((t) => t.email === `nt${rand}@x.com`).id;
 

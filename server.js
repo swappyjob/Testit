@@ -514,6 +514,38 @@ app.post('/api/teachers/:id/reset-link', requireRoot, requireActiveSubscription,
   res.json({ resetPath: `/reset?token=${token}` });
 }));
 
+// Root edits a signed-up teacher in their organization (name, phone, role).
+// Email is immutable. A root can't remove their own root status (self-lockout).
+app.put('/api/teachers/:id', requireRoot, requireActiveSubscription, h(async (req, res) => {
+  const teacherId = Number(req.params.id);
+  const t = await get("SELECT id FROM users WHERE id = ? AND role = 'teacher' AND org_id = ?", [teacherId, req.user.org_id]);
+  if (!t) return res.status(404).json({ error: 'Teacher not found.' });
+  const name = (req.body.name || '').trim();
+  const phone = (req.body.phone || '').trim();
+  let isRoot = req.body.isRoot ? 1 : 0;
+  if (!name) return res.status(400).json({ error: 'Teacher name is required.' });
+  if (!/^[\d+()\-\s]{6,20}$/.test(phone)) return res.status(400).json({ error: 'Please enter a valid phone number.' });
+  if (teacherId === req.user.id) isRoot = 1;
+  await run('UPDATE users SET name = ?, phone = ?, is_root = ? WHERE id = ?', [name, phone, isRoot, teacherId]);
+  res.json({ ok: true });
+}));
+
+// Root edits a still-pending teacher invite in their organization (name, phone, role).
+app.put('/api/teacher-invites/:token', requireRoot, requireActiveSubscription, h(async (req, res) => {
+  const inv = await get(
+    "SELECT id FROM signup_tokens WHERE token = ? AND invite_role = 'teacher' AND used = 0 AND org_id = ?",
+    [req.params.token, req.user.org_id]
+  );
+  if (!inv) return res.status(404).json({ error: 'Invite not found.' });
+  const name = (req.body.name || '').trim();
+  const phone = (req.body.phone || '').trim();
+  const isRoot = req.body.isRoot ? 1 : 0;
+  if (!name) return res.status(400).json({ error: 'Name is required.' });
+  if (!/^[\d+()\-\s]{6,20}$/.test(phone)) return res.status(400).json({ error: 'Please enter a valid phone number.' });
+  await run('UPDATE signup_tokens SET name = ?, phone = ?, is_root = ? WHERE token = ?', [name, phone, isRoot, req.params.token]);
+  res.json({ ok: true });
+}));
+
 // ============================================================================
 // ADMIN  (platform root admin: organizations + their root teachers)
 // ============================================================================
