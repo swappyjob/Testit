@@ -119,6 +119,14 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
   function addQuestion() {
     setQuestions((qs) => { const n = [...qs, blankQuestion('multi', Number(defaultPoints) || 1)]; setPage(n.length); return n; });
   }
+  // Changing the default also updates any question still on the previous default
+  // (i.e. not individually overridden), so the first pre-created question follows it.
+  function changeDefaultPoints(val) {
+    const nv = Number(val) || 1;
+    const prev = Number(defaultPoints);
+    setQuestions((qs) => qs.map((q) => (Number(q.points) === prev ? { ...q, points: nv } : q)));
+    setDefaultPoints(nv);
+  }
   function removeQuestion(i) {
     setQuestions((qs) => {
       if (qs.length <= 1) return qs;
@@ -204,7 +212,7 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
           <input type="number" min="0" step="1" value={durationMinutes} onChange={(e) => setDurationMinutes(e.target.value)} placeholder="0 = no timer" style={{ width: 180 }} />
 
           <label>Default marks per question</label>
-          <input type="number" min="1" step="1" value={defaultPoints} onChange={(e) => setDefaultPoints(Number(e.target.value) || 1)} style={{ width: 140 }} />
+          <input type="number" min="1" step="1" value={defaultPoints} onChange={(e) => changeDefaultPoints(e.target.value)} style={{ width: 140 }} />
           <p className="muted" style={{ fontSize: 13, margin: '6px 0 0' }}>New questions use this value; you can still change an individual question's marks.</p>
 
           <div className="q-card" style={{ marginTop: 16 }}>
