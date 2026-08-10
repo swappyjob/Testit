@@ -53,9 +53,24 @@ export default function TakeTest() {
   useEffect(() => {
     if (!user) return;
     api('/api/take/' + assignmentId)
-      .then((d) => { setData(d); if (d.durationMinutes > 0 && d.remainingSeconds != null) setRemaining(d.remainingSeconds); })
+      .then((d) => {
+        setData(d);
+        if (d.savedAnswers && Object.keys(d.savedAnswers).length) setAnswers(d.savedAnswers);
+        if (Number.isInteger(d.currentIndex) && d.questions) setCurrent(Math.max(0, Math.min(d.currentIndex, d.questions.length - 1)));
+        if (d.durationMinutes > 0 && d.remainingSeconds != null) setRemaining(d.remainingSeconds);
+      })
       .catch((e) => setMsg(e.message));
   }, [user]);
+
+  // Auto-save answers + position so the student can resume after a disconnect.
+  useEffect(() => {
+    if (!data || result || submitting.current) return;
+    const timer = setTimeout(() => {
+      api('/api/take/' + assignmentId + '/progress', 'POST', { answers, currentIndex: current }).catch(() => {});
+    }, 800);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [answers, current, data, result]);
 
   async function requestFs() {
     try { await document.documentElement.requestFullscreen(); } catch { /* best effort */ }

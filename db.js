@@ -204,6 +204,10 @@ async function init() {
   await pool.query('ALTER TABLE tests ADD COLUMN IF NOT EXISTS proctored INTEGER NOT NULL DEFAULT 0');
   await pool.query('ALTER TABLE tests ADD COLUMN IF NOT EXISTS max_violations INTEGER NOT NULL DEFAULT 3');
   await pool.query('ALTER TABLE attempts ADD COLUMN IF NOT EXISTS violations INTEGER NOT NULL DEFAULT 0');
+  // In-progress answers + position, so a student can resume a test after a
+  // disconnect. Cleared/ignored once the attempt is submitted.
+  await pool.query("ALTER TABLE attempts ADD COLUMN IF NOT EXISTS draft_answers TEXT NOT NULL DEFAULT ''");
+  await pool.query('ALTER TABLE attempts ADD COLUMN IF NOT EXISTS current_index INTEGER NOT NULL DEFAULT 0');
   await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS access_until TEXT NOT NULL DEFAULT ''");
   await pool.query("ALTER TABLE signup_tokens ADD COLUMN IF NOT EXISTS access_until TEXT NOT NULL DEFAULT ''");
   await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS org_id INTEGER REFERENCES organizations(id) ON DELETE SET NULL');

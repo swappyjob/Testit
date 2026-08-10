@@ -1070,6 +1070,7 @@ app.get('/api/my-assignments', requireAuth('student'), h(async (req, res) => {
     description: r.description,
     questionCount: r.question_count,
     submitted: !!r.submitted_at,
+    started: !!r.attempt_id && !r.submitted_at,
     needsGrading: !!r.needs_grading,
     score: r.submitted_at ? r.auto_score + r.manual_score : null,
     maxScore: r.max_score,
@@ -1121,25 +1122,39 @@ app.get('/api/take/:assignmentId', requireAuth('student'), h(async (req, res) =>
   if (isClosed(test.due_date))
     return res.status(403).json({ error: 'The deadline for this test has passed. You can no longer take it.' });
 
-  // For a timed test, anchor the countdown to a server-recorded start time.
-  // The first open creates an in-progress attempt; reopening resumes the same clock.
+  // Ensure an in-progress attempt exists so answers/position can be saved and
+  // resumed after a disconnect. For timed tests this also anchors the countdown.
+  if (!attempt) {
+    attempt = (await run(
+      'INSERT INTO attempts (assignment_id, test_id, student_id) VALUES (?, ?, ?) RETURNING id, started_at, draft_answers, current_index',
+      [a.id, a.test_id, req.user.id]
+    )).rows[0];
+  }
   let remainingSeconds = null;
   if (test.duration_minutes > 0) {
-    if (!attempt) {
-      attempt = (await run(
-        'INSERT INTO attempts (assignment_id, test_id, student_id) VALUES (?, ?, ?) RETURNING id, started_at',
-        [a.id, a.test_id, req.user.id]
-      )).rows[0];
-    }
     const elapsed = (Date.now() - new Date(attempt.started_at).getTime()) / 1000;
     remainingSeconds = Math.max(0, Math.round(test.duration_minutes * 60 - elapsed));
   }
+  let savedAnswers = {};
+  try { const p = JSON.parse(attempt.draft_answers || '{}'); if (p && typeof p === 'object') savedAnswers = p; } catch { /* ignore */ }
 
   const questions = (await all(
     'SELECT id, type, prompt, options_json, image_url, points, section FROM questions WHERE test_id = ? AND archived = 0 ORDER BY position',
     [a.test_id]
   )).map((q) => ({ id: q.id, type: q.type, prompt: q.prompt, points: q.points, image: q.image_url, section: q.section, options: JSON.parse(q.options_json) }));
-  res.json({ test, questions, durationMinutes: test.duration_minutes, remainingSeconds });
+  res.json({ test, questions, durationMinutes: test.duration_minutes, remainingSeconds, savedAnswers, currentIndex: attempt.current_index || 0 });
+}));
+
+// Auto-save a student's in-progress answers + position (resume after disconnect).
+app.post('/api/take/:assignmentId/progress', requireAuth('student'), h(async (req, res) => {
+  const a = await get('SELECT * FROM assignments WHERE id = ? AND student_id = ?', [req.params.assignmentId, req.user.id]);
+  if (!a) return res.status(404).json({ error: 'Assignment not found.' });
+  const attempt = await get('SELECT id, submitted_at FROM attempts WHERE assignment_id = ?', [a.id]);
+  if (!attempt || attempt.submitted_at) return res.json({ ok: false });
+  const answers = (req.body.answers && typeof req.body.answers === 'object') ? req.body.answers : {};
+  const currentIndex = Math.max(0, Math.round(Number(req.body.currentIndex)) || 0);
+  await run('UPDATE attempts SET draft_answers = ?, current_index = ? WHERE id = ?', [JSON.stringify(answers), currentIndex, attempt.id]);
+  res.json({ ok: true });
 }));
 
 // Submit answers — auto-grade mcq/truefalse, flag short answers for the teacher.

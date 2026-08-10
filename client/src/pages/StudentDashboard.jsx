@@ -40,7 +40,7 @@ export default function StudentDashboard() {
                 ) : a.closed ? (
                   <span className="pill gray">closed · deadline passed</span>
                 ) : (
-                  <Link className="btn small" to={'/take-test?a=' + a.assignmentId}>Start test</Link>
+                  <Link className="btn small" to={'/take-test?a=' + a.assignmentId}>{a.started ? 'Resume test' : 'Start test'}</Link>
                 )}
               </div>
             </div>
