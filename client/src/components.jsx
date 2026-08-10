@@ -82,6 +82,39 @@ export function useCopyButton() {
   };
 }
 
+// Date + time picker with an explicit 12-hour AM/PM selector (native
+// datetime-local can't force 12h). Value is 'YYYY-MM-DDTHH:mm' (24h) or ''.
+export function DateTime12({ value, onChange }) {
+  const m = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})/.exec(value || '');
+  const cur = m
+    ? { date: m[1], hour: (Number(m[2]) % 12) || 12, minute: Number(m[3]), ampm: Number(m[2]) < 12 ? 'AM' : 'PM' }
+    : { date: '', hour: 11, minute: 59, ampm: 'PM' };
+  function emit(patch) {
+    const s = { ...cur, ...patch };
+    if (!s.date) { onChange(''); return; }
+    let h = s.hour % 12; if (s.ampm === 'PM') h += 12;
+    onChange(`${s.date}T${String(h).padStart(2, '0')}:${String(s.minute).padStart(2, '0')}`);
+  }
+  const box = { width: 'auto' };
+  return (
+    <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+      <input type="date" value={cur.date} onChange={(e) => emit({ date: e.target.value })} style={box} />
+      <select value={cur.hour} onChange={(e) => emit({ hour: Number(e.target.value) })} style={box}>
+        {Array.from({ length: 12 }, (_, i) => i + 1).map((h) => <option key={h} value={h}>{h}</option>)}
+      </select>
+      <span>:</span>
+      <select value={cur.minute} onChange={(e) => emit({ minute: Number(e.target.value) })} style={box}>
+        {Array.from({ length: 60 }, (_, i) => i).map((mm) => <option key={mm} value={mm}>{String(mm).padStart(2, '0')}</option>)}
+      </select>
+      <select value={cur.ampm} onChange={(e) => emit({ ampm: e.target.value })} style={box}>
+        <option value="AM">AM</option>
+        <option value="PM">PM</option>
+      </select>
+      {cur.date && <button type="button" className="btn ghost small" onClick={() => onChange('')}>Clear</button>}
+    </div>
+  );
+}
+
 // Format a datetime string for display.
 export function fmtDateTime(s) {
   const d = new Date(s);

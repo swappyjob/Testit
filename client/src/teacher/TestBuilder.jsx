@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { api } from '../api.js';
-import { Msg } from '../components.jsx';
+import { Msg, DateTime12 } from '../components.jsx';
 
 const TYPE_LABEL = { mcq: 'Multiple choice', multi: 'Multiple answers', truefalse: 'True / False', short: 'Short answer' };
 const parseCorrectSet = (raw) => { try { const a = JSON.parse(raw); return Array.isArray(a) ? a.map(Number) : []; } catch { return []; } };
@@ -206,7 +206,7 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
           <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Instructions for students..." />
 
           <label>End date &amp; time (optional deadline)</label>
-          <input type="datetime-local" value={dueDate} onChange={(e) => setDueDate(e.target.value)} style={{ width: 'auto' }} />
+          <DateTime12 value={dueDate} onChange={setDueDate} />
 
           <label>Time limit in minutes (optional timer)</label>
           <input type="number" min="0" step="1" value={durationMinutes} onChange={(e) => setDurationMinutes(e.target.value)} placeholder="0 = no timer" style={{ width: 180 }} />
