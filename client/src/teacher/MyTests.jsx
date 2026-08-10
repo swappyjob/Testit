@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { api } from '../api.js';
 import { Msg, fmtDateTime } from '../components.jsx';
 
-export default function MyTests({ onEdit, onResumeDraft, readOnly }) {
+export default function MyTests({ onEdit, onResumeDraft, onCreate, readOnly }) {
   const [tests, setTests] = useState(null);
   const [drafts, setDrafts] = useState([]);
   const [detail, setDetail] = useState(null); // { kind:'assign'|'results'|'attempt', test, attemptId }
@@ -52,8 +52,11 @@ export default function MyTests({ onEdit, onResumeDraft, readOnly }) {
         </div>
       )}
       <div className="card">
-        <h1>My Tests</h1>
-        {tests.length === 0 && <p className="muted">No tests yet. Go to <b>Create Test</b> to make your first one.</p>}
+        <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+          <h1 style={{ margin: 0 }}>My Tests</h1>
+          <button className="btn" disabled={readOnly} onClick={onCreate}>➕ Create test</button>
+        </div>
+        {tests.length === 0 && <p className="muted" style={{ marginTop: 12 }}>No tests yet. Click <b>Create test</b> to make your first one.</p>}
       </div>
       {tests.map((t) => (
         <div key={t.id}>

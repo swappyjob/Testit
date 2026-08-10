@@ -78,14 +78,13 @@ export default function TeacherDashboard() {
             </span>
           </div>
         )}
-        {tab !== 'create' && <StatsBar />}
+        {tab !== 'create' && <StatsBar onNavigate={setTab} />}
         <div className="tabs">
           <Tab id="tests" label="My Tests" icon="📋" />
-          <Tab id="create" label="Create Test" icon="➕" onClick={openCreate} disabled={readOnly} />
           <Tab id="students" label="Students" icon="👥" />
           <Tab id="teachers" label="Teachers" icon="🧑‍🏫" />
         </div>
-        {tab === 'tests' && <MyTests onEdit={openEdit} onResumeDraft={openDraft} readOnly={readOnly} />}
+        {tab === 'tests' && <MyTests onEdit={openEdit} onResumeDraft={openDraft} onCreate={openCreate} readOnly={readOnly} />}
         {tab === 'create' && !readOnly && <TestBuilder key={editTestId ? 'e' + editTestId : draftId ? 'd' + draftId : 'new'} editId={editTestId} draftId={draftId} onSaved={afterSave} onCancel={cancelBuild} />}
         {tab === 'students' && <StudentsTab readOnly={readOnly} />}
         {tab === 'teachers' && <TeachersTab readOnly={readOnly} />}
@@ -96,7 +95,7 @@ export default function TeacherDashboard() {
 }
 
 // At-a-glance counts across the organization. Fails quietly if any call errors.
-function StatsBar() {
+function StatsBar({ onNavigate }) {
   const [s, setS] = useState(null);
   useEffect(() => {
     let alive = true;
@@ -114,17 +113,20 @@ function StatsBar() {
   }, []);
   if (!s) return null;
   const items = [
-    { ic: '📝', n: s.tests, l: 'Tests' },
-    { ic: '👥', n: s.students, l: 'Students' },
-    { ic: '🧑‍🏫', n: s.teachers, l: 'Teachers' },
-    { ic: '📌', n: s.assigned, l: 'Assignments' },
+    { ic: '📝', n: s.tests, l: 'Tests', to: 'tests' },
+    { ic: '👥', n: s.students, l: 'Students', to: 'students' },
+    { ic: '🧑‍🏫', n: s.teachers, l: 'Teachers', to: 'teachers' },
+    { ic: '📌', n: s.assigned, l: 'Assignments', to: 'tests' },
   ];
   return (
     <div className="stats">
       {items.map((it) => (
-        <div className="stat" key={it.l}>
+        <div className="stat" key={it.l} role="button" tabIndex={0} title={`Open ${it.l}`}
+          style={{ cursor: 'pointer' }}
+          onClick={() => onNavigate(it.to)}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onNavigate(it.to); }}>
           <span className="ic" aria-hidden="true">{it.ic}</span>
-          <span><span className="n">{it.n}</span><br /><span className="l">{it.l}</span></span>
+          <span><span className="n">{it.n}</span><br /><span className="l">{it.l} ›</span></span>
         </div>
       ))}
     </div>

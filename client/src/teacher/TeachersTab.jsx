@@ -6,6 +6,7 @@ export default function TeachersTab({ readOnly }) {
   const [data, setData] = useState(null); // { teachers, canManage }
   const [form, setForm] = useState({ name: '', email: '', phone: '', role: 'teacher' });
   const [editing, setEditing] = useState(null); // teacher row being edited
+  const [showAdd, setShowAdd] = useState(false);
   const [msg, setMsg] = useState(null);
 
   const load = () => api('/api/teachers').then(setData);
@@ -39,7 +40,7 @@ export default function TeachersTab({ readOnly }) {
 
   return (
     <>
-      {canManage && !readOnly && (
+      {canManage && !readOnly && showAdd && (
         <div className="card">
           <h1>Add a teacher</h1>
           <p className="muted">Invite another teacher and choose their role. Root teachers can add more teachers; normal teachers cannot.</p>
@@ -61,7 +62,11 @@ export default function TeachersTab({ readOnly }) {
       )}
 
       <div className="card">
-        <h2>All teachers</h2>
+        <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+          <h2 style={{ margin: 0 }}>All teachers</h2>
+          {canManage && !readOnly && <button className="btn small" onClick={() => setShowAdd((v) => !v)}>{showAdd ? 'Close' : '➕ Add teacher'}</button>}
+        </div>
+        <div style={{ marginTop: 12 }} />
         {data.teachers.length === 0 ? <p className="muted">No teachers yet.</p> : (
           <table>
             <thead><tr><th>Name</th><th>Email</th><th>Mobile number</th><th>Role</th><th>Status</th></tr></thead>

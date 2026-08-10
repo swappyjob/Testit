@@ -8,6 +8,7 @@ export default function StudentsTab({ readOnly }) {
   const [form, setForm] = useState({ name: '', email: '', phone: '', accessUntil: '' });
   const [msg, setMsg] = useState(null); // { text, ok }
   const [selectedId, setSelectedId] = useState(null); // signup-invite id (s.id)
+  const [showAdd, setShowAdd] = useState(false);
   const timer = useRef(null);
 
   const load = (q = query) => api('/api/students' + (q ? '?q=' + encodeURIComponent(q) : '')).then((d) => setStudents(d.students));
@@ -35,7 +36,7 @@ export default function StudentsTab({ readOnly }) {
 
   return (
     <>
-      {!readOnly && (
+      {!readOnly && showAdd && (
       <div className="card">
         <h1>Add a student</h1>
         <p className="muted">Create a student, then open their page to copy their unique signup link and send it to them.</p>
@@ -54,7 +55,10 @@ export default function StudentsTab({ readOnly }) {
       <div className="card">
         <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
           <h2 style={{ margin: 0 }}>Students in your organization</h2>
-          <a className="btn secondary small" href="/api/students/export.csv" download>⬇ Download CSV</a>
+          <div className="row">
+            {!readOnly && <button className="btn small" onClick={() => setShowAdd((v) => !v)}>{showAdd ? 'Close' : '➕ Create student'}</button>}
+            <a className="btn secondary small" href="/api/students/export.csv" download>⬇ Download CSV</a>
+          </div>
         </div>
         <input type="text" value={query} onChange={(e) => onSearch(e.target.value)} placeholder="🔍 Search by name or email..." style={{ margin: '14px 0' }} />
         {students === null ? <p className="muted">Loading…</p> : students.length === 0 ? (
