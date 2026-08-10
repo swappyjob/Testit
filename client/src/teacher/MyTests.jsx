@@ -90,6 +90,9 @@ function AssignPanel({ test, onChanged }) {
     onChanged?.();
   }
 
+  const assignable = students ? students.filter((s) => !assigned.has(s.studentId)) : [];
+  const allSelected = assignable.length > 0 && assignable.every((s) => checked.has(s.studentId));
+
   return (
     <div className="card">
       <h2>Assign "{test.title}"</h2>
@@ -98,6 +101,13 @@ function AssignPanel({ test, onChanged }) {
       ) : (
         <>
           <p className="muted">Tick the students who should take this test.</p>
+          {assignable.length > 0 && (
+            <label className="choice" style={{ fontWeight: 600, borderBottom: '1px solid var(--line)', borderRadius: 0 }}>
+              <input type="checkbox" checked={allSelected}
+                onChange={(e) => setChecked(e.target.checked ? new Set(assignable.map((s) => s.studentId)) : new Set())} />
+              Select all ({assignable.length})
+            </label>
+          )}
           {students.map((s) => {
             const done = assigned.has(s.studentId);
             return (
