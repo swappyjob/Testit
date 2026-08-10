@@ -2,13 +2,21 @@ import { useState, useEffect, useRef } from 'react';
 import { api } from '../api.js';
 import { Msg, fmtDateTime } from '../components.jsx';
 
-export default function MyTests({ onEdit, readOnly }) {
+export default function MyTests({ onEdit, onResumeDraft, readOnly }) {
   const [tests, setTests] = useState(null);
+  const [drafts, setDrafts] = useState([]);
   const [detail, setDetail] = useState(null); // { kind:'assign'|'results'|'attempt', test, attemptId }
   const detailRef = useRef(null);
 
   const load = () => api('/api/tests').then((d) => setTests(d.tests));
-  useEffect(() => { load(); }, []);
+  const loadDrafts = () => api('/api/drafts').then((d) => setDrafts(d.drafts)).catch(() => {});
+  useEffect(() => { load(); loadDrafts(); }, []);
+
+  async function discardDraft(d) {
+    if (!window.confirm(`Discard draft "${d.title || 'Untitled test'}"? This can't be undone.`)) return;
+    await api('/api/drafts/' + d.id, 'DELETE');
+    loadDrafts();
+  }
   // Bring the inline panel into view when it opens (in case it sits below the fold).
   useEffect(() => { if (detail && detailRef.current) detailRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }, [detail]);
 
@@ -26,6 +34,23 @@ export default function MyTests({ onEdit, readOnly }) {
 
   return (
     <>
+      {drafts.length > 0 && !readOnly && (
+        <div className="card" style={{ borderColor: 'var(--brand-2)' }}>
+          <h2 style={{ marginTop: 0 }}>📝 Drafts — unfinished tests</h2>
+          {drafts.map((d) => (
+            <div className="list-item" key={d.id}>
+              <div>
+                <h3 style={{ margin: 0 }}>{d.title || 'Untitled test'}</h3>
+                <div className="muted" style={{ fontSize: 13 }}>Last saved {fmtDateTime(d.updatedAt)}</div>
+              </div>
+              <div className="row">
+                <button className="btn small" onClick={() => onResumeDraft(d.id)}>Resume</button>
+                <button className="btn danger small" onClick={() => discardDraft(d)}>Discard</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
       <div className="card">
         <h1>My Tests</h1>
         {tests.length === 0 && <p className="muted">No tests yet. Go to <b>Create Test</b> to make your first one.</p>}

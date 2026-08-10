@@ -975,6 +975,41 @@ app.delete('/api/tests/:id', requireAuth('teacher'), requireActiveSubscription, 
 }));
 
 // ============================================================================
+// TEST DRAFTS  (auto-saved, resumable work-in-progress test creation)
+// ============================================================================
+app.get('/api/drafts', requireAuth('teacher'), h(async (req, res) => {
+  const rows = await all('SELECT id, title, updated_at FROM test_drafts WHERE teacher_id = ? ORDER BY updated_at DESC', [req.user.id]);
+  res.json({ drafts: rows.map((r) => ({ id: r.id, title: r.title || '', updatedAt: r.updated_at })) });
+}));
+
+app.post('/api/drafts', requireAuth('teacher'), requireActiveSubscription, h(async (req, res) => {
+  const title = String(req.body.title || '').slice(0, 300);
+  const data = typeof req.body.data === 'string' ? req.body.data : JSON.stringify(req.body.data || {});
+  const id = (await run('INSERT INTO test_drafts (teacher_id, title, data) VALUES (?, ?, ?) RETURNING id', [req.user.id, title, data])).rows[0].id;
+  res.json({ id });
+}));
+
+app.put('/api/drafts/:id', requireAuth('teacher'), requireActiveSubscription, h(async (req, res) => {
+  const d = await get('SELECT id FROM test_drafts WHERE id = ? AND teacher_id = ?', [Number(req.params.id), req.user.id]);
+  if (!d) return res.status(404).json({ error: 'Draft not found.' });
+  const title = String(req.body.title || '').slice(0, 300);
+  const data = typeof req.body.data === 'string' ? req.body.data : JSON.stringify(req.body.data || {});
+  await run('UPDATE test_drafts SET title = ?, data = ?, updated_at = NOW() WHERE id = ?', [title, data, d.id]);
+  res.json({ ok: true });
+}));
+
+app.get('/api/drafts/:id', requireAuth('teacher'), h(async (req, res) => {
+  const d = await get('SELECT id, title, data FROM test_drafts WHERE id = ? AND teacher_id = ?', [Number(req.params.id), req.user.id]);
+  if (!d) return res.status(404).json({ error: 'Draft not found.' });
+  res.json({ id: d.id, title: d.title || '', data: d.data || '{}' });
+}));
+
+app.delete('/api/drafts/:id', requireAuth('teacher'), h(async (req, res) => {
+  await run('DELETE FROM test_drafts WHERE id = ? AND teacher_id = ?', [Number(req.params.id), req.user.id]);
+  res.json({ ok: true });
+}));
+
+// ============================================================================
 // ASSIGNMENTS  (teacher assigns a test to students)
 // ============================================================================
 app.post('/api/assignments', requireAuth('teacher'), requireActiveSubscription, h(async (req, res) => {

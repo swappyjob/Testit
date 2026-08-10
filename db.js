@@ -235,6 +235,15 @@ async function init() {
   }
   // The Free trial is capped at 5 students (migrate databases seeded at the old 15).
   await pool.query("UPDATE plans SET max_students = 5 WHERE name = 'Free' AND max_students = 15");
+
+  // Auto-saved, resumable drafts of a test being created (JSON of builder state).
+  await pool.query(`CREATE TABLE IF NOT EXISTS test_drafts (
+    id          SERIAL PRIMARY KEY,
+    teacher_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    title       TEXT NOT NULL DEFAULT '',
+    data        TEXT NOT NULL DEFAULT '{}',
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
   // Existing organizations default to Basic.
   await pool.query("UPDATE organizations SET plan_id = (SELECT id FROM plans WHERE name = 'Basic') WHERE plan_id IS NULL");
 }

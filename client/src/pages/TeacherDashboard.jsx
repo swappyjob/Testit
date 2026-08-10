@@ -12,6 +12,7 @@ export default function TeacherDashboard() {
   const me = useRequireRole('teacher', '/teacher-login');
   const [tab, setTab] = useState('tests');
   const [editTestId, setEditTestId] = useState(null);
+  const [draftId, setDraftId] = useState(null);
   const [showProfile, setShowProfile] = useState(false);
   const [profilePane, setProfilePane] = useState('account');
   const [orgPlan, setOrgPlan] = useState(null); // { plan, studentCount, plans }
@@ -33,9 +34,11 @@ export default function TeacherDashboard() {
   const showLimitBanner = (atLimit || nearLimit) && !limitDismissed;
 
   const readOnly = !!me.subscriptionExpired;
-  const openCreate = () => { if (readOnly) return; setEditTestId(null); setTab('create'); };
-  const openEdit = (id) => { setEditTestId(id); setTab('create'); };
-  const afterSave = () => { setEditTestId(null); setTab('tests'); };
+  const openCreate = () => { if (readOnly) return; setEditTestId(null); setDraftId(null); setTab('create'); };
+  const openEdit = (id) => { setEditTestId(id); setDraftId(null); setTab('create'); };
+  const openDraft = (id) => { setEditTestId(null); setDraftId(id); setTab('create'); };
+  const afterSave = () => { setEditTestId(null); setDraftId(null); setTab('tests'); };
+  const cancelBuild = () => { setEditTestId(null); setDraftId(null); setTab('tests'); };
 
   const Tab = ({ id, label, icon, onClick, disabled }) => (
     <button className={'tab' + (tab === id ? ' active' : '')} disabled={disabled}
@@ -82,8 +85,8 @@ export default function TeacherDashboard() {
           <Tab id="students" label="Students" icon="👥" />
           <Tab id="teachers" label="Teachers" icon="🧑‍🏫" />
         </div>
-        {tab === 'tests' && <MyTests onEdit={openEdit} readOnly={readOnly} />}
-        {tab === 'create' && !readOnly && <TestBuilder key={editTestId || 'new'} editId={editTestId} onSaved={afterSave} onCancel={() => { setEditTestId(null); setTab('tests'); }} />}
+        {tab === 'tests' && <MyTests onEdit={openEdit} onResumeDraft={openDraft} readOnly={readOnly} />}
+        {tab === 'create' && !readOnly && <TestBuilder key={editTestId ? 'e' + editTestId : draftId ? 'd' + draftId : 'new'} editId={editTestId} draftId={draftId} onSaved={afterSave} onCancel={cancelBuild} />}
         {tab === 'students' && <StudentsTab readOnly={readOnly} />}
         {tab === 'teachers' && <TeachersTab readOnly={readOnly} />}
       </div>

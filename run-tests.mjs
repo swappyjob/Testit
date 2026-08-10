@@ -17,7 +17,7 @@ const env = { ...process.env, PGDATABASE: 'testit_test', PGPASSWORD, PORT: Strin
 const uploadsDir = path.join(__dirname, 'public', 'uploads');
 const listUploads = () => { try { return new Set(fs.readdirSync(uploadsDir)); } catch { return new Set(); } };
 
-const SUITES = ['admin', 'teachers', 'e2e', 'edit', 'phone', 'search', 'disable', 'access', 'student-edit', 'export', 'password', 'reset', 'deadline', 'timer', 'image', 'negmark', 'multi', 'section', 'subscription', 'proctor', 'student-review'];
+const SUITES = ['admin', 'teachers', 'e2e', 'edit', 'phone', 'search', 'disable', 'access', 'student-edit', 'export', 'password', 'reset', 'deadline', 'timer', 'image', 'negmark', 'multi', 'section', 'subscription', 'proctor', 'student-review', 'draft'];
 
 // Reset the test database to a clean schema-less state; the server recreates the schema.
 const admin = new pg.Client({

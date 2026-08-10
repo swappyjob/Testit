@@ -1,25 +1,24 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { api } from '../api.js';
 import { Msg } from '../components.jsx';
 
-const blankQuestion = (type) => ({
+const TYPE_LABEL = { mcq: 'Multiple choice', multi: 'Multiple answers', truefalse: 'True / False', short: 'Short answer' };
+const parseCorrectSet = (raw) => { try { const a = JSON.parse(raw); return Array.isArray(a) ? a.map(Number) : []; } catch { return []; } };
+
+const blankQuestion = (type, points = 1) => ({
   type,
   prompt: '',
   options: type === 'mcq' || type === 'multi' ? ['', '', '', ''] : [],
   correct: type === 'mcq' ? 0 : type === 'multi' ? [] : type === 'truefalse' ? 'true' : '',
-  points: 1,
+  points,
   image: '',
   section: '',
   explanation: '',
 });
-const TYPE_LABEL = { mcq: 'Multiple choice', multi: 'Multiple answers', truefalse: 'True / False', short: 'Short answer' };
 
-// Parse a stored multi-answer key ("[0,2]") into an array of numbers.
-const parseCorrectSet = (raw) => {
-  try { const a = JSON.parse(raw); return Array.isArray(a) ? a.map(Number) : []; } catch { return []; }
-};
-
-export default function TestBuilder({ editId, onSaved, onCancel }) {
+// A resumable, one-question-per-page test builder. New tests auto-save as a
+// server draft; editing an existing test saves only on Publish.
+export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onCancel }) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [dueDate, setDueDate] = useState('');
@@ -28,213 +27,265 @@ export default function TestBuilder({ editId, onSaved, onCancel }) {
   const [penalty, setPenalty] = useState(1);
   const [proctored, setProctored] = useState(false);
   const [maxViolations, setMaxViolations] = useState(3);
-  const [sections, setSections] = useState([]); // e.g. ['Quantitative Aptitude', 'Physics']
+  const [defaultPoints, setDefaultPoints] = useState(1);
+  const [sections, setSections] = useState([]);
   const [newSection, setNewSection] = useState('');
-  const [questions, setQuestions] = useState([blankQuestion('multi')]);
+  const [questions, setQuestions] = useState([blankQuestion('multi', 1)]);
+  const [page, setPage] = useState(0); // 0 = details, 1..N = questions, N+1 = review
   const [msg, setMsg] = useState('');
+  const [draftId, setDraftId] = useState(propDraftId || null);
+  const [ready, setReady] = useState(false);
+  const [savedAt, setSavedAt] = useState(null);
+  const savingRef = useRef(false);
+  const lastSnapRef = useRef(null);
 
+  const isDraftMode = !editId; // editing a live test does not auto-save drafts
+
+  // ---- Load an existing test (edit) or a saved draft (resume) ----
   useEffect(() => {
-    if (!editId) return;
-    api('/api/tests/' + editId).then(({ test, questions }) => {
-      setTitle(test.title);
-      setDescription(test.description || '');
-      setDueDate(test.due_date || '');
-      setDurationMinutes(test.duration_minutes || '');
-      setNegativeMarking(!!test.negative_marking);
-      setPenalty(test.penalty > 0 ? test.penalty : 1);
-      setProctored(!!test.proctored);
-      setMaxViolations(test.max_violations > 0 ? test.max_violations : 3);
-      const qs = questions.map((q) => ({
-        type: q.type,
-        prompt: q.prompt,
+    let alive = true;
+    async function loadEdit() {
+      const { test, questions: qs } = await api('/api/tests/' + editId);
+      if (!alive) return;
+      setTitle(test.title); setDescription(test.description || '');
+      setDueDate(test.due_date || ''); setDurationMinutes(test.duration_minutes || '');
+      setNegativeMarking(!!test.negative_marking); setPenalty(test.penalty > 0 ? test.penalty : 1);
+      setProctored(!!test.proctored); setMaxViolations(test.max_violations > 0 ? test.max_violations : 3);
+      const mapped = qs.map((q) => ({
+        type: q.type, prompt: q.prompt,
         options: q.type === 'mcq' || q.type === 'multi' ? q.options : [],
-        correct: q.type === 'mcq' ? Number(q.correct_answer)
-          : q.type === 'multi' ? parseCorrectSet(q.correct_answer)
-          : q.type === 'truefalse' ? q.correct_answer : '',
-        points: q.points,
-        image: q.image_url || '',
-        section: q.section || '',
-        explanation: q.explanation || '',
+        correct: q.type === 'mcq' ? Number(q.correct_answer) : q.type === 'multi' ? parseCorrectSet(q.correct_answer) : q.type === 'truefalse' ? q.correct_answer : '',
+        points: q.points, image: q.image_url || '', section: q.section || '', explanation: q.explanation || '',
       }));
-      setQuestions(qs);
-      // Rebuild the section list from whatever sections the questions use (in order of first appearance).
-      const seen = [];
-      qs.forEach((q) => { if (q.section && !seen.includes(q.section)) seen.push(q.section); });
-      setSections(seen);
-    });
-  }, [editId]);
+      setQuestions(mapped.length ? mapped : [blankQuestion('multi', 1)]);
+      setDefaultPoints(mapped[0] ? mapped[0].points : 1);
+      const secs = []; mapped.forEach((q) => { if (q.section && !secs.includes(q.section)) secs.push(q.section); });
+      setSections(secs);
+      setReady(true);
+    }
+    async function loadDraft() {
+      const d = await api('/api/drafts/' + propDraftId);
+      if (!alive) return;
+      let s = {}; try { s = JSON.parse(d.data); } catch { /* ignore */ }
+      setTitle(s.title || ''); setDescription(s.description || '');
+      setDueDate(s.dueDate || ''); setDurationMinutes(s.durationMinutes || '');
+      setNegativeMarking(!!s.negativeMarking); setPenalty(s.penalty > 0 ? s.penalty : 1);
+      setProctored(!!s.proctored); setMaxViolations(s.maxViolations > 0 ? s.maxViolations : 3);
+      setDefaultPoints(s.defaultPoints > 0 ? s.defaultPoints : 1);
+      setSections(Array.isArray(s.sections) ? s.sections : []);
+      setQuestions(Array.isArray(s.questions) && s.questions.length ? s.questions : [blankQuestion('multi', s.defaultPoints || 1)]);
+      setPage(Number.isInteger(s.page) ? s.page : 0);
+      setReady(true);
+    }
+    if (editId) loadEdit().catch((e) => setMsg(e.message));
+    else if (propDraftId) loadDraft().catch((e) => setMsg(e.message));
+    else setReady(true);
+    return () => { alive = false; };
+  }, [editId, propDraftId]);
 
+  // ---- Auto-save (new/draft only), debounced, only after a real change ----
+  const snapshot = JSON.stringify({ title, description, dueDate, durationMinutes, negativeMarking, penalty, proctored, maxViolations, defaultPoints, sections, questions, page });
+  async function saveDraft() {
+    if (savingRef.current) return;
+    savingRef.current = true;
+    try {
+      const t = title.trim() || 'Untitled test';
+      if (draftId) await api('/api/drafts/' + draftId, 'PUT', { title: t, data: snapshot });
+      else { const r = await api('/api/drafts', 'POST', { title: t, data: snapshot }); setDraftId(r.id); }
+      setSavedAt(Date.now());
+    } catch { /* ignore auto-save errors (e.g. read-only) */ }
+    finally { savingRef.current = false; }
+  }
+  useEffect(() => {
+    if (!isDraftMode || !ready) return;
+    if (lastSnapRef.current === null) { lastSnapRef.current = snapshot; return; }
+    if (snapshot === lastSnapRef.current) return;
+    const timer = setTimeout(async () => { await saveDraft(); lastSnapRef.current = snapshot; }, 1200);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snapshot, ready]);
+
+  // ---- Helpers ----
   const updateQ = (i, patch) => setQuestions((qs) => qs.map((q, idx) => (idx === i ? { ...q, ...patch } : q)));
-  const removeQ = (i) => setQuestions((qs) => qs.filter((_, idx) => idx !== i));
-  const addQ = (type) => setQuestions((qs) => [...qs, blankQuestion(type)]);
   const setOption = (qi, oi, val) => updateQ(qi, { options: questions[qi].options.map((o, idx) => (idx === oi ? val : o)) });
   const addOption = (qi) => updateQ(qi, { options: [...questions[qi].options, ''] });
-
-  function addSection() {
-    const name = newSection.trim();
-    if (!name) return;
-    if (!sections.includes(name)) setSections((s) => [...s, name]);
-    setNewSection('');
+  function changeType(i, newType) {
+    updateQ(i, {
+      type: newType,
+      options: newType === 'multi' ? (questions[i].options.length ? questions[i].options : ['', '', '', '']) : [],
+      correct: newType === 'multi' ? [] : newType === 'truefalse' ? 'true' : '',
+    });
   }
-  function removeSection(name) {
-    setSections((s) => s.filter((x) => x !== name));
-    // Un-assign this section from any question that used it.
-    setQuestions((qs) => qs.map((q) => (q.section === name ? { ...q, section: '' } : q)));
+  function addQuestion() {
+    setQuestions((qs) => { const n = [...qs, blankQuestion('multi', Number(defaultPoints) || 1)]; setPage(n.length); return n; });
   }
-
+  function removeQuestion(i) {
+    setQuestions((qs) => {
+      if (qs.length <= 1) return qs;
+      const n = qs.filter((_, idx) => idx !== i);
+      setPage((p) => Math.min(p, n.length));
+      return n;
+    });
+  }
+  function addSection() { const name = newSection.trim(); if (name && !sections.includes(name)) setSections((s) => [...s, name]); setNewSection(''); }
+  function removeSection(name) { setSections((s) => s.filter((x) => x !== name)); setQuestions((qs) => qs.map((q) => (q.section === name ? { ...q, section: '' } : q))); }
   async function uploadImage(qi, file) {
     if (!file) return;
     if (file.size > 5 * 1024 * 1024) { alert('Image must be 5 MB or smaller.'); return; }
     try {
-      const dataUrl = await new Promise((res, rej) => {
-        const r = new FileReader();
-        r.onload = () => res(r.result); r.onerror = () => rej(new Error('Could not read the file.'));
-        r.readAsDataURL(file);
-      });
+      const dataUrl = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(new Error('Could not read the file.')); r.readAsDataURL(file); });
       const { url } = await api('/api/upload', 'POST', { dataUrl });
       updateQ(qi, { image: url });
     } catch (e) { alert(e.message); }
   }
 
-  async function save() {
-    setMsg('');
-    // For MCQ/multi, drop blank choices and remap the correct index/indices to
-    // the kept list (indices must line up with the options actually stored).
-    const clean = questions.map((q) => {
-      if (q.type === 'mcq') {
-        const kept = [];
-        let correct = -1;
-        q.options.forEach((v, idx) => { if (v.trim() !== '') { if (idx === Number(q.correct)) correct = kept.length; kept.push(v); } });
+  function cleanQuestions() {
+    return questions.map((q) => {
+      if (q.type === 'multi') {
+        const kept = []; const correct = []; const chosen = new Set((q.correct || []).map(Number));
+        q.options.forEach((v, idx) => { if (v.trim() !== '') { if (chosen.has(idx)) correct.push(kept.length); kept.push(v); } });
         return { ...q, options: kept, correct };
       }
-      if (q.type === 'multi') {
-        const kept = [];
-        const correct = [];
-        const chosen = new Set((q.correct || []).map(Number));
-        q.options.forEach((v, idx) => { if (v.trim() !== '') { if (chosen.has(idx)) correct.push(kept.length); kept.push(v); } });
+      if (q.type === 'mcq') {
+        const kept = []; let correct = -1;
+        q.options.forEach((v, idx) => { if (v.trim() !== '') { if (idx === Number(q.correct)) correct = kept.length; kept.push(v); } });
         return { ...q, options: kept, correct };
       }
       return q;
     });
+  }
+  async function publish() {
+    setMsg('');
     const payload = {
       title, description, dueDate,
       durationMinutes: Number(durationMinutes) || 0,
       negativeMarking, penalty,
       proctored, maxViolations: Number(maxViolations) || 3,
-      questions: clean,
+      questions: cleanQuestions(),
     };
     try {
       if (editId) await api('/api/tests/' + editId, 'PUT', payload);
       else await api('/api/tests', 'POST', payload);
+      if (draftId) { try { await api('/api/drafts/' + draftId, 'DELETE'); } catch { /* ignore */ } }
       onSaved();
     } catch (e) { setMsg(e.message); }
   }
 
+  // ---- Render ----
+  const total = questions.length;
+  const onHeader = page === 0;
+  const onReview = page === total + 1;
+  const qIndex = onHeader || onReview ? -1 : page - 1;
+  const q = qIndex >= 0 ? questions[qIndex] : null;
+
   return (
     <div className="card">
-      <h1>{editId ? 'Edit test' : 'Create a new test'}</h1>
-      {editId && (
-        <div className="msg" style={{ background: '#fef3c7', color: '#92400e' }}>
-          You are editing an existing test. Existing student submissions are preserved with their original questions; your changes apply only to students who haven't taken it yet.
-        </div>
-      )}
+      <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+        <h1 style={{ margin: 0 }}>{editId ? 'Edit test' : 'Create a test'}</h1>
+        {isDraftMode && <span className="pill gray">{draftId ? (savedAt ? '✓ Draft saved' : 'Saving…') : 'Auto-saves as you go'}</span>}
+      </div>
+      <p className="muted" style={{ marginTop: 6 }}>
+        {onHeader ? 'Step 1 — Test details (applies to the whole test)' : onReview ? `Review — ${total} question(s)` : `Question ${page} of ${total}`}
+      </p>
       <Msg text={msg} />
-      <label>Test title</label>
-      <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Chapter 1 Quiz" />
-      <label>Description (optional)</label>
-      <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Instructions for students..." />
 
-      <label>End date &amp; time (optional deadline)</label>
-      <input type="datetime-local" value={dueDate} onChange={(e) => setDueDate(e.target.value)} style={{ width: 'auto' }} />
-      <p className="muted" style={{ fontSize: 13, margin: '6px 0 0' }}>After this moment, students can no longer open or submit the test. Leave blank for no deadline.</p>
+      {/* ---------------- DETAILS PAGE ---------------- */}
+      {onHeader && (
+        <>
+          <label>Test title</label>
+          <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Chapter 1 Quiz" />
+          <label>Description (optional)</label>
+          <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Instructions for students..." />
 
-      <label>Time limit in minutes (optional timer)</label>
-      <input type="number" min="0" step="1" value={durationMinutes} onChange={(e) => setDurationMinutes(e.target.value)} placeholder="0 = no timer" style={{ width: 180 }} />
-      <p className="muted" style={{ fontSize: 13, margin: '6px 0 0' }}>Each student's timer starts when they open the test and it auto-submits when time runs out. Leave 0 for no timer.</p>
+          <label>End date &amp; time (optional deadline)</label>
+          <input type="datetime-local" value={dueDate} onChange={(e) => setDueDate(e.target.value)} style={{ width: 'auto' }} />
 
-      <div className="q-card" style={{ marginTop: 16 }}>
-        <label className="choice" style={{ fontWeight: 600 }}>
-          <input type="checkbox" checked={negativeMarking} onChange={(e) => setNegativeMarking(e.target.checked)} />
-          Enable negative marking (deduct marks for wrong answers)
-        </label>
-        {negativeMarking && (
-          <div style={{ marginTop: 8 }}>
-            <label>Marks deducted per wrong answer</label>
-            <input type="number" min="1" step="1" value={penalty} onChange={(e) => setPenalty(Number(e.target.value) || 1)} style={{ width: 120 }} />
-            <p className="muted" style={{ fontSize: 13, margin: '6px 0 0' }}>
-              Applies to multiple-choice, multiple-answer &amp; true/false questions. Blank answers are never penalized. A student's total can go negative.
-            </p>
+          <label>Time limit in minutes (optional timer)</label>
+          <input type="number" min="0" step="1" value={durationMinutes} onChange={(e) => setDurationMinutes(e.target.value)} placeholder="0 = no timer" style={{ width: 180 }} />
+
+          <label>Default marks per question</label>
+          <input type="number" min="1" step="1" value={defaultPoints} onChange={(e) => setDefaultPoints(Number(e.target.value) || 1)} style={{ width: 140 }} />
+          <p className="muted" style={{ fontSize: 13, margin: '6px 0 0' }}>New questions use this value; you can still change an individual question's marks.</p>
+
+          <div className="q-card" style={{ marginTop: 16 }}>
+            <label className="choice" style={{ fontWeight: 600 }}>
+              <input type="checkbox" checked={negativeMarking} onChange={(e) => setNegativeMarking(e.target.checked)} />
+              Enable negative marking (deduct marks for wrong answers)
+            </label>
+            {negativeMarking && (
+              <div style={{ marginTop: 8 }}>
+                <label>Marks deducted per wrong answer</label>
+                <input type="number" min="1" step="1" value={penalty} onChange={(e) => setPenalty(Number(e.target.value) || 1)} style={{ width: 120 }} />
+              </div>
+            )}
           </div>
-        )}
-      </div>
 
-      <div className="q-card" style={{ marginTop: 16 }}>
-        <label className="choice" style={{ fontWeight: 600 }}>
-          <input type="checkbox" checked={proctored} onChange={(e) => setProctored(e.target.checked)} />
-          🔒 Enable proctoring (fullscreen + anti-cheating monitoring)
-        </label>
-        {proctored && (
-          <div style={{ marginTop: 8 }}>
-            <label>Auto-submit after this many violations</label>
-            <input type="number" min="1" step="1" value={maxViolations} onChange={(e) => setMaxViolations(Number(e.target.value) || 1)} style={{ width: 120 }} />
-            <p className="muted" style={{ fontSize: 13, margin: '6px 0 0' }}>
-              The test runs in fullscreen. Switching tabs/windows or leaving fullscreen is warned and counted; copy, paste and right-click are blocked. After this many violations the test auto-submits. Every violation is recorded for you to review. (Browser measures deter casual cheating but can't stop a second device or another person.)
-            </p>
+          <div className="q-card" style={{ marginTop: 16 }}>
+            <label className="choice" style={{ fontWeight: 600 }}>
+              <input type="checkbox" checked={proctored} onChange={(e) => setProctored(e.target.checked)} />
+              🔒 Enable proctoring (fullscreen + anti-cheating monitoring)
+            </label>
+            {proctored && (
+              <div style={{ marginTop: 8 }}>
+                <label>Auto-submit after this many violations</label>
+                <input type="number" min="1" step="1" value={maxViolations} onChange={(e) => setMaxViolations(Number(e.target.value) || 1)} style={{ width: 120 }} />
+              </div>
+            )}
           </div>
-        )}
-      </div>
 
-      <div className="q-card" style={{ marginTop: 16 }}>
-        <label style={{ fontWeight: 600 }}>Sections (optional)</label>
-        <p className="muted" style={{ fontSize: 13, margin: '2px 0 8px' }}>
-          Group questions into sections like Quantitative Aptitude, Physics or Chemistry, then pick a section for each question below.
-        </p>
-        <div className="row" style={{ gap: 8 }}>
-          <input type="text" value={newSection} onChange={(e) => setNewSection(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addSection(); } }}
-            placeholder="e.g. Quantitative Aptitude" style={{ flex: 1 }} />
-          <button className="btn secondary small" type="button" onClick={addSection}>+ Add section</button>
-        </div>
-        {sections.length > 0 && (
-          <div className="row" style={{ gap: 6, flexWrap: 'wrap', marginTop: 10 }}>
-            {sections.map((s) => (
-              <span key={s} className="pill brand" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                {s}
-                <button type="button" onClick={() => removeSection(s)}
-                  title="Remove section" style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', fontWeight: 700, lineHeight: 1 }}>×</button>
-              </span>
-            ))}
+          <div className="q-card" style={{ marginTop: 16 }}>
+            <label style={{ fontWeight: 600 }}>Sections (optional)</label>
+            <p className="muted" style={{ fontSize: 13, margin: '2px 0 8px' }}>Group questions (e.g. Quantitative Aptitude, Physics), then pick a section per question.</p>
+            <div className="row" style={{ gap: 8 }}>
+              <input type="text" value={newSection} onChange={(e) => setNewSection(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addSection(); } }} placeholder="e.g. Physics" style={{ flex: 1 }} />
+              <button className="btn secondary small" type="button" onClick={addSection}>+ Add section</button>
+            </div>
+            {sections.length > 0 && (
+              <div className="row" style={{ gap: 6, flexWrap: 'wrap', marginTop: 10 }}>
+                {sections.map((s) => (
+                  <span key={s} className="pill brand" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    {s}<button type="button" onClick={() => removeSection(s)} style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', fontWeight: 700 }}>×</button>
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        </>
+      )}
 
-      <h2 style={{ marginTop: 22 }}>Questions</h2>
-      {questions.map((q, i) => (
-        <div className="q-card" key={i}>
-          <div className="row" style={{ justifyContent: 'space-between' }}>
-            <span className="pill brand">{TYPE_LABEL[q.type]}</span>
-            <button className="btn danger small" onClick={() => removeQ(i)}>Remove</button>
-          </div>
-          {sections.length > 0 && (
-            <>
-              <label>Section</label>
-              <select value={q.section || ''} onChange={(e) => updateQ(i, { section: e.target.value })} style={{ width: 'auto' }}>
-                <option value="">— No section —</option>
-                {sections.map((s) => <option key={s} value={s}>{s}</option>)}
-              </select>
-            </>
-          )}
+      {/* ---------------- QUESTION PAGE ---------------- */}
+      {q && (
+        <div className="q-card">
+          <label>Question type</label>
+          <select value={q.type} onChange={(e) => changeType(qIndex, e.target.value)} style={{ width: 'auto' }}>
+            <option value="multi">Multiple answers</option>
+            <option value="truefalse">True / False</option>
+            <option value="short">Short answer</option>
+            {q.type === 'mcq' && <option value="mcq">Multiple choice (legacy)</option>}
+          </select>
+
           <label>Question text</label>
-          <textarea value={q.prompt} onChange={(e) => updateQ(i, { prompt: e.target.value })} placeholder="Type the question..." />
+          <textarea value={q.prompt} onChange={(e) => updateQ(qIndex, { prompt: e.target.value })} placeholder="Type the question..." />
 
           <label>Image (optional)</label>
           {q.image ? (
             <div style={{ marginTop: 8 }}>
               <img src={q.image} alt="" style={{ maxWidth: 240, maxHeight: 180, border: '1px solid var(--line)', borderRadius: 8, display: 'block' }} />
-              <button className="btn danger small" style={{ marginTop: 6 }} onClick={() => updateQ(i, { image: '' })}>Remove image</button>
+              <button className="btn danger small" style={{ marginTop: 6 }} onClick={() => updateQ(qIndex, { image: '' })}>Remove image</button>
             </div>
           ) : (
-            <input type="file" accept="image/png,image/jpeg,image/gif,image/webp" onChange={(e) => uploadImage(i, e.target.files[0])} />
+            <input type="file" accept="image/png,image/jpeg,image/gif,image/webp" onChange={(e) => uploadImage(qIndex, e.target.files[0])} />
+          )}
+
+          {sections.length > 0 && (
+            <>
+              <label>Section</label>
+              <select value={q.section || ''} onChange={(e) => updateQ(qIndex, { section: e.target.value })} style={{ width: 'auto' }}>
+                <option value="">— No section —</option>
+                {sections.map((s) => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </>
           )}
 
           {q.type === 'mcq' && (
@@ -242,11 +293,11 @@ export default function TestBuilder({ editId, onSaved, onCancel }) {
               <label>Choices (select the correct one)</label>
               {q.options.map((opt, oi) => (
                 <div className="row" key={oi} style={{ marginBottom: 6 }}>
-                  <input type="radio" name={'correct-' + i} checked={Number(q.correct) === oi} onChange={() => updateQ(i, { correct: oi })} style={{ width: 'auto' }} />
-                  <input type="text" value={opt} onChange={(e) => setOption(i, oi, e.target.value)} placeholder={'Choice ' + (oi + 1)} style={{ flex: 1 }} />
+                  <input type="radio" name={'correct-' + qIndex} checked={Number(q.correct) === oi} onChange={() => updateQ(qIndex, { correct: oi })} style={{ width: 'auto' }} />
+                  <input type="text" value={opt} onChange={(e) => setOption(qIndex, oi, e.target.value)} placeholder={'Choice ' + (oi + 1)} style={{ flex: 1 }} />
                 </div>
               ))}
-              <button className="btn ghost small" style={{ marginTop: 6 }} onClick={() => addOption(i)}>+ Add choice</button>
+              <button className="btn ghost small" style={{ marginTop: 6 }} onClick={() => addOption(qIndex)}>+ Add choice</button>
             </>
           )}
           {q.type === 'multi' && (
@@ -258,45 +309,67 @@ export default function TestBuilder({ editId, onSaved, onCancel }) {
                   <div className="row" key={oi} style={{ marginBottom: 6 }}>
                     <input type="checkbox" checked={chosen} onChange={() => {
                       const cur = new Set((q.correct || []).map(Number));
-                      if (cur.has(oi)) cur.delete(oi); else cur.add(oi);
-                      updateQ(i, { correct: [...cur].sort((a, b) => a - b) });
+                      cur.has(oi) ? cur.delete(oi) : cur.add(oi);
+                      updateQ(qIndex, { correct: [...cur].sort((a, b) => a - b) });
                     }} style={{ width: 'auto' }} />
-                    <input type="text" value={opt} onChange={(e) => setOption(i, oi, e.target.value)} placeholder={'Choice ' + (oi + 1)} style={{ flex: 1 }} />
+                    <input type="text" value={opt} onChange={(e) => setOption(qIndex, oi, e.target.value)} placeholder={'Choice ' + (oi + 1)} style={{ flex: 1 }} />
                   </div>
                 );
               })}
-              <button className="btn ghost small" style={{ marginTop: 6 }} onClick={() => addOption(i)}>+ Add choice</button>
-              <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>Students see checkboxes and may pick more than one. Full marks only if they select exactly the ticked answers.</p>
+              <button className="btn ghost small" style={{ marginTop: 6 }} onClick={() => addOption(qIndex)}>+ Add choice</button>
             </>
           )}
           {q.type === 'truefalse' && (
             <>
               <label>Correct answer</label>
-              <select value={q.correct} onChange={(e) => updateQ(i, { correct: e.target.value })}>
+              <select value={q.correct} onChange={(e) => updateQ(qIndex, { correct: e.target.value })}>
                 <option value="true">True</option>
                 <option value="false">False</option>
               </select>
             </>
           )}
-          {q.type === 'short' && (
-            <p className="muted" style={{ fontSize: 13 }}>Students type a written answer. You grade it later.</p>
-          )}
-          <label>Points</label>
-          <input type="number" min="1" value={q.points} onChange={(e) => updateQ(i, { points: Number(e.target.value) || 1 })} style={{ width: 100 }} />
+          {q.type === 'short' && <p className="muted" style={{ fontSize: 13 }}>Students type a written answer. You grade it later.</p>}
+
+          <label>Marks</label>
+          <input type="number" min="1" value={q.points} onChange={(e) => updateQ(qIndex, { points: Number(e.target.value) || 1 })} style={{ width: 100 }} />
 
           <label>Explanation for the correct answer (optional)</label>
-          <textarea value={q.explanation} onChange={(e) => updateQ(i, { explanation: e.target.value })} placeholder="Explain why the correct answer is right. Shown to students when they review the test." />
+          <textarea value={q.explanation} onChange={(e) => updateQ(qIndex, { explanation: e.target.value })} placeholder="Shown to students when they review the test." />
         </div>
-      ))}
+      )}
 
-      <div className="row">
-        <button className="btn secondary small" onClick={() => addQ('multi')}>+ Multiple answers</button>
-        <button className="btn secondary small" onClick={() => addQ('truefalse')}>+ True / False</button>
-        <button className="btn secondary small" onClick={() => addQ('short')}>+ Short answer</button>
-      </div>
-      <div className="row" style={{ marginTop: 22 }}>
-        <button className="btn" onClick={save}>{editId ? 'Update test' : 'Save test'}</button>
-        <button className="btn ghost" onClick={onCancel}>Cancel</button>
+      {/* ---------------- REVIEW PAGE ---------------- */}
+      {onReview && (
+        <div className="q-card">
+          <h2 style={{ marginTop: 0 }}>{title || <span className="muted">Untitled test</span>}</h2>
+          <p className="muted">{total} question(s) · {questions.reduce((n, x) => n + (Number(x.points) || 0), 0)} total marks</p>
+          <table>
+            <thead><tr><th>#</th><th>Type</th><th>Question</th><th>Marks</th></tr></thead>
+            <tbody>
+              {questions.map((x, i) => (
+                <tr key={i} style={{ cursor: 'pointer' }} onClick={() => setPage(i + 1)}>
+                  <td>{i + 1}</td>
+                  <td>{TYPE_LABEL[x.type]}</td>
+                  <td>{x.prompt ? x.prompt.slice(0, 60) : <span className="pill amber">no text</span>}</td>
+                  <td>{x.points}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="muted" style={{ fontSize: 13 }}>Click a row to jump back and edit it.</p>
+        </div>
+      )}
+
+      {/* ---------------- NAV ---------------- */}
+      <div className="row" style={{ justifyContent: 'space-between', marginTop: 22 }}>
+        <button className="btn ghost" type="button" onClick={() => (onHeader ? onCancel() : setPage((p) => p - 1))}>{onHeader ? 'Cancel' : '← Back'}</button>
+        <div className="row">
+          {q && <button className="btn danger small" type="button" onClick={() => removeQuestion(qIndex)} disabled={total <= 1}>Remove question</button>}
+          {(q || onReview) && <button className="btn secondary" type="button" onClick={addQuestion}>+ Add question</button>}
+          {onReview
+            ? <button className="btn" type="button" onClick={publish}>{editId ? 'Save changes' : 'Publish test'}</button>
+            : <button className="btn" type="button" onClick={() => setPage((p) => Math.min(total + 1, p + 1))}>{page === total ? 'Review →' : 'Next →'}</button>}
+        </div>
       </div>
     </div>
   );
