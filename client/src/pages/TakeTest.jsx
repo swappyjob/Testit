@@ -32,6 +32,7 @@ export default function TakeTest() {
   const user = useRequireRole('student', '/student-login');
   const [params] = useSearchParams();
   const assignmentId = params.get('a');
+  const storageKey = 'testit-attempt-' + assignmentId; // browser-side resume, no server load
 
   const [data, setData] = useState(null);       // { test, questions, durationMinutes, remainingSeconds }
   const [msg, setMsg] = useState('');
@@ -55,22 +56,24 @@ export default function TakeTest() {
     api('/api/take/' + assignmentId)
       .then((d) => {
         setData(d);
-        if (d.savedAnswers && Object.keys(d.savedAnswers).length) setAnswers(d.savedAnswers);
-        if (Number.isInteger(d.currentIndex) && d.questions) setCurrent(Math.max(0, Math.min(d.currentIndex, d.questions.length - 1)));
+        // Resume from the browser (localStorage) — survives refresh/crash on the
+        // same device with zero server load. Nothing is streamed to the server.
+        let saved = null;
+        try { const raw = localStorage.getItem(storageKey); if (raw) saved = JSON.parse(raw); } catch { /* ignore */ }
+        const ans = (saved && saved.answers) || {};
+        const idx = saved && Number.isInteger(saved.current) ? saved.current : 0;
+        if (Object.keys(ans).length) setAnswers(ans);
+        if (d.questions) setCurrent(Math.max(0, Math.min(idx, d.questions.length - 1)));
         if (d.durationMinutes > 0 && d.remainingSeconds != null) setRemaining(d.remainingSeconds);
       })
       .catch((e) => setMsg(e.message));
   }, [user]);
 
-  // Auto-save answers + position so the student can resume after a disconnect.
+  // Persist answers + position to the browser only (no server writes).
   useEffect(() => {
-    if (!data || result || submitting.current) return;
-    const timer = setTimeout(() => {
-      api('/api/take/' + assignmentId + '/progress', 'POST', { answers, currentIndex: current }).catch(() => {});
-    }, 800);
-    return () => clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [answers, current, data, result]);
+    if (!data || result) return;
+    try { localStorage.setItem(storageKey, JSON.stringify({ answers, current })); } catch { /* ignore */ }
+  }, [answers, current, data, result, storageKey]);
 
   async function requestFs() {
     try { await document.documentElement.requestFullscreen(); } catch { /* best effort */ }
@@ -153,6 +156,7 @@ export default function TakeTest() {
       const payload = {};
       data.questions.forEach((q) => { payload[q.id] = answers[q.id] ?? ''; });
       const r = await api('/api/submit/' + assignmentId, 'POST', { answers: payload, violations: violationsRef.current });
+      try { localStorage.removeItem(storageKey); } catch { /* ignore */ }
       if (document.fullscreenElement) { try { await document.exitFullscreen(); } catch { /* ignore */ } }
       setResult({ ...r, auto, reason });
     } catch (e) { submitting.current = false; setMsg(e.message); }
