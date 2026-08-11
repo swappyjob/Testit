@@ -841,6 +841,87 @@ async function writeQuestions(runFn, testId, questions) {
   }
 }
 
+// Convert a builder-shape question into stored answer fields (drops blank
+// choices and remaps the correct index/set). Used by the question bank.
+function normalizeQuestion(q) {
+  let options_json = '[]', correct_answer = '';
+  if (q.type === 'mcq') {
+    const kept = []; let correct = 0;
+    (q.options || []).forEach((v, idx) => { if (String(v).trim() !== '') { if (idx === Number(q.correct)) correct = kept.length; kept.push(v); } });
+    options_json = JSON.stringify(kept); correct_answer = String(correct);
+  } else if (q.type === 'multi') {
+    const kept = []; const arr = []; const chosen = new Set((Array.isArray(q.correct) ? q.correct : []).map(Number));
+    (q.options || []).forEach((v, idx) => { if (String(v).trim() !== '') { if (chosen.has(idx)) arr.push(kept.length); kept.push(v); } });
+    options_json = JSON.stringify(kept); correct_answer = JSON.stringify(arr);
+  } else if (q.type === 'truefalse') {
+    correct_answer = String(q.correct);
+  }
+  return {
+    type: q.type, prompt: String(q.prompt || '').trim(), options_json, correct_answer,
+    image_url: safeImageUrl(q.image), points: Number(q.points) > 0 ? Number(q.points) : 1,
+    explanation: typeof q.explanation === 'string' ? q.explanation.trim() : '',
+  };
+}
+
+// ============================================================================
+// QUESTION BANK  (organization-wide reusable questions)
+// ============================================================================
+app.get('/api/bank', requireAuth('teacher'), h(async (req, res) => {
+  const q = (req.query.q || '').trim();
+  const topic = (req.query.topic || '').trim();
+  const type = (req.query.type || '').trim();
+  const where = ['org_id = ?']; const args = [req.user.org_id];
+  if (q) { where.push("prompt ILIKE ? ESCAPE '\\'"); args.push('%' + q.replace(/[\\%_]/g, '\\$&') + '%'); }
+  if (topic) { where.push('topic = ?'); args.push(topic); }
+  if (['mcq', 'multi', 'truefalse', 'short'].includes(type)) { where.push('type = ?'); args.push(type); }
+  const rows = await all(`SELECT * FROM bank_questions WHERE ${where.join(' AND ')} ORDER BY created_at DESC`, args);
+  const topics = (await all("SELECT DISTINCT topic FROM bank_questions WHERE org_id = ? AND topic <> '' ORDER BY topic", [req.user.org_id])).map((r) => r.topic);
+  res.json({
+    questions: rows.map((r) => ({
+      id: r.id, type: r.type, prompt: r.prompt, options: JSON.parse(r.options_json),
+      correctAnswer: r.correct_answer, points: r.points, image: r.image_url,
+      explanation: r.explanation, topic: r.topic, difficulty: r.difficulty,
+    })),
+    topics,
+  });
+}));
+
+app.post('/api/bank', requireAuth('teacher'), requireActiveSubscription, h(async (req, res) => {
+  const q = req.body || {};
+  const invalid = validateQuestions([q]);
+  if (invalid) return res.status(400).json({ error: invalid });
+  const n = normalizeQuestion(q);
+  const topic = String(q.topic || '').trim().slice(0, 100);
+  const difficulty = String(q.difficulty || '').trim().slice(0, 20);
+  const id = (await run(
+    `INSERT INTO bank_questions (org_id, created_by, type, prompt, options_json, correct_answer, points, image_url, explanation, topic, difficulty)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+    [req.user.org_id, req.user.id, n.type, n.prompt, n.options_json, n.correct_answer, n.points, n.image_url, n.explanation, topic, difficulty]
+  )).rows[0].id;
+  res.json({ id });
+}));
+
+app.put('/api/bank/:id', requireAuth('teacher'), requireActiveSubscription, h(async (req, res) => {
+  const existing = await get('SELECT id FROM bank_questions WHERE id = ? AND org_id = ?', [Number(req.params.id), req.user.org_id]);
+  if (!existing) return res.status(404).json({ error: 'Question not found.' });
+  const q = req.body || {};
+  const invalid = validateQuestions([q]);
+  if (invalid) return res.status(400).json({ error: invalid });
+  const n = normalizeQuestion(q);
+  const topic = String(q.topic || '').trim().slice(0, 100);
+  const difficulty = String(q.difficulty || '').trim().slice(0, 20);
+  await run(
+    'UPDATE bank_questions SET type = ?, prompt = ?, options_json = ?, correct_answer = ?, points = ?, image_url = ?, explanation = ?, topic = ?, difficulty = ? WHERE id = ?',
+    [n.type, n.prompt, n.options_json, n.correct_answer, n.points, n.image_url, n.explanation, topic, difficulty, existing.id]
+  );
+  res.json({ ok: true });
+}));
+
+app.delete('/api/bank/:id', requireAuth('teacher'), h(async (req, res) => {
+  await run('DELETE FROM bank_questions WHERE id = ? AND org_id = ?', [Number(req.params.id), req.user.org_id]);
+  res.json({ ok: true });
+}));
+
 // Accepts a base64 data URL, saves it as an image file, returns its public URL.
 const IMAGE_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
 app.post('/api/upload', requireAuth('teacher'), requireActiveSubscription, (req, res) => {

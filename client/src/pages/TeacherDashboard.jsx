@@ -7,6 +7,7 @@ import TestBuilder from '../teacher/TestBuilder.jsx';
 import StudentsTab from '../teacher/StudentsTab.jsx';
 import TeachersTab from '../teacher/TeachersTab.jsx';
 import SubscriptionTab from '../teacher/SubscriptionTab.jsx';
+import QuestionBank from '../teacher/QuestionBank.jsx';
 
 export default function TeacherDashboard() {
   const me = useRequireRole('teacher', '/teacher-login');
@@ -83,11 +84,13 @@ export default function TeacherDashboard() {
           <Tab id="tests" label="My Tests" icon="📋" />
           <Tab id="students" label="Students" icon="👥" />
           <Tab id="teachers" label="Teachers" icon="🧑‍🏫" />
+          <Tab id="bank" label="Question Bank" icon="📚" />
         </div>
         {tab === 'tests' && <MyTests onEdit={openEdit} onResumeDraft={openDraft} onCreate={openCreate} readOnly={readOnly} />}
         {tab === 'create' && !readOnly && <TestBuilder key={editTestId ? 'e' + editTestId : draftId ? 'd' + draftId : 'new'} editId={editTestId} draftId={draftId} onSaved={afterSave} onCancel={cancelBuild} />}
         {tab === 'students' && <StudentsTab readOnly={readOnly} />}
         {tab === 'teachers' && <TeachersTab readOnly={readOnly} />}
+        {tab === 'bank' && <QuestionBank readOnly={readOnly} />}
       </div>
       {showProfile && <ProfileModal me={me} initialPane={profilePane} onClose={() => setShowProfile(false)} />}
     </>

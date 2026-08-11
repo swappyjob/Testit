@@ -240,6 +240,24 @@ async function init() {
   // The Free trial is capped at 5 students (migrate databases seeded at the old 15).
   await pool.query("UPDATE plans SET max_students = 5 WHERE name = 'Free' AND max_students = 15");
 
+  // Organization-wide question bank: reusable questions any teacher in the org
+  // can pull into a test. Mirrors the questions shape + topic/difficulty tags.
+  await pool.query(`CREATE TABLE IF NOT EXISTS bank_questions (
+    id             SERIAL PRIMARY KEY,
+    org_id         INTEGER REFERENCES organizations(id) ON DELETE CASCADE,
+    created_by     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    type           TEXT NOT NULL,
+    prompt         TEXT NOT NULL,
+    options_json   TEXT NOT NULL DEFAULT '[]',
+    correct_answer TEXT NOT NULL DEFAULT '',
+    points         INTEGER NOT NULL DEFAULT 1,
+    image_url      TEXT NOT NULL DEFAULT '',
+    explanation    TEXT NOT NULL DEFAULT '',
+    topic          TEXT NOT NULL DEFAULT '',
+    difficulty     TEXT NOT NULL DEFAULT '',
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+
   // Auto-saved, resumable drafts of a test being created (JSON of builder state).
   await pool.query(`CREATE TABLE IF NOT EXISTS test_drafts (
     id          SERIAL PRIMARY KEY,

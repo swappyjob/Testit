@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { api } from '../api.js';
 import { Msg, DateTime12 } from '../components.jsx';
+import { BankPicker } from './QuestionBank.jsx';
 
 const TYPE_LABEL = { mcq: 'Single choice', multi: 'Multiple answers', truefalse: 'True / False', short: 'Short answer' };
 const parseCorrectSet = (raw) => { try { const a = JSON.parse(raw); return Array.isArray(a) ? a.map(Number) : []; } catch { return []; } };
@@ -36,6 +37,8 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
   const [draftId, setDraftId] = useState(propDraftId || null);
   const [ready, setReady] = useState(false);
   const [savedAt, setSavedAt] = useState(null);
+  const [showBank, setShowBank] = useState(false);
+  const [bankMsg, setBankMsg] = useState('');
   const savingRef = useRef(false);
   const lastSnapRef = useRef(null);
 
@@ -119,6 +122,19 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
   }
   function addQuestion() {
     setQuestions((qs) => { const n = [...qs, blankQuestion('mcq', Number(defaultPoints) || 1)]; setPage(n.length); return n; });
+  }
+  function addFromBank(newOnes) {
+    setShowBank(false);
+    if (!newOnes || !newOnes.length) return;
+    setQuestions((qs) => { const n = [...qs, ...newOnes]; setPage(qs.length + 1); return n; });
+  }
+  async function saveToBank(i) {
+    const cur = questions[i];
+    if (!cur) return;
+    try {
+      await api('/api/bank', 'POST', { type: cur.type, prompt: cur.prompt, options: cur.options, correct: cur.correct, points: cur.points, explanation: cur.explanation, topic: cur.section || '', difficulty: '' });
+      setBankMsg('✓ Saved to bank'); setTimeout(() => setBankMsg(''), 2500);
+    } catch (e) { setBankMsg(e.message); }
   }
   // Changing the default also updates any question still on the previous default
   // (i.e. not individually overridden), so the first pre-created question follows it.
@@ -344,6 +360,11 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
 
           <label>Explanation for the correct answer (optional)</label>
           <textarea value={q.explanation} onChange={(e) => updateQ(qIndex, { explanation: e.target.value })} placeholder="Shown to students when they review the test." />
+
+          <div className="row" style={{ marginTop: 10, alignItems: 'center', gap: 10 }}>
+            <button className="btn ghost small" type="button" onClick={() => saveToBank(qIndex)}>💾 Save this question to the bank</button>
+            {bankMsg && <span className="muted">{bankMsg}</span>}
+          </div>
         </div>
       )}
 
@@ -374,12 +395,15 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
         <button className="btn ghost" type="button" onClick={() => (onHeader ? onCancel() : setPage((p) => p - 1))}>{onHeader ? 'Cancel' : '← Back'}</button>
         <div className="row">
           {q && <button className="btn danger small" type="button" onClick={() => removeQuestion(qIndex)} disabled={total <= 1}>Remove question</button>}
+          {(q || onReview) && <button className="btn secondary" type="button" onClick={() => setShowBank(true)}>📚 Add from bank</button>}
           {(q || onReview) && <button className="btn secondary" type="button" onClick={addQuestion}>+ Add question</button>}
           {onReview
             ? <button className="btn" type="button" onClick={publish}>{editId ? 'Save changes' : 'Publish test'}</button>
             : <button className="btn" type="button" onClick={() => setPage((p) => Math.min(total + 1, p + 1))}>{page === total ? 'Review →' : 'Next →'}</button>}
         </div>
       </div>
+
+      {showBank && <BankPicker onClose={() => setShowBank(false)} onAdd={addFromBank} />}
     </div>
   );
 }
