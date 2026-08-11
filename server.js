@@ -1269,6 +1269,26 @@ app.get('/api/tests/:id/results', requireAuth('teacher'), h(async (req, res) => 
   });
 }));
 
+// Top 10 students by score for a test (the "toppers board").
+app.get('/api/tests/:id/leaderboard', requireAuth('teacher'), h(async (req, res) => {
+  const test = await get('SELECT * FROM tests WHERE id = ? AND teacher_id = ?', [req.params.id, req.user.id]);
+  if (!test) return res.status(404).json({ error: 'Test not found.' });
+  const rows = await all(
+    `SELECT u.name, u.email, (at.auto_score + at.manual_score) AS score, at.max_score, at.submitted_at, at.needs_grading
+       FROM attempts at JOIN users u ON u.id = at.student_id
+      WHERE at.test_id = ? AND at.submitted_at IS NOT NULL
+      ORDER BY (at.auto_score + at.manual_score) DESC, at.submitted_at ASC
+      LIMIT 10`,
+    [test.id]
+  );
+  let rank = 0, prevScore = null;
+  const leaderboard = rows.map((r, i) => {
+    if (prevScore === null || r.score !== prevScore) { rank = i + 1; prevScore = r.score; } // competition ranking (ties share a rank)
+    return { rank, name: r.name, email: r.email, score: r.score, maxScore: r.max_score, submittedAt: r.submitted_at, needsGrading: !!r.needs_grading };
+  });
+  res.json({ title: test.title, leaderboard, anyPending: leaderboard.some((x) => x.needsGrading) });
+}));
+
 // Full detail of one attempt (for grading / review).
 app.get('/api/attempts/:attemptId', requireAuth('teacher'), h(async (req, res) => {
   const attempt = await get(

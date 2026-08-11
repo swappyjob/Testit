@@ -77,6 +77,7 @@ export default function MyTests({ onEdit, onResumeDraft, onCreate, readOnly }) {
               <button className="btn secondary small" disabled={readOnly} onClick={() => onEdit(t.id)}>Edit</button>
               <button className="btn small" disabled={readOnly} onClick={() => toggle('assign', t)}>{isOpen('assign', t) ? 'Close' : 'Assign'}</button>
               <button className="btn secondary small" onClick={() => toggle('results', t)}>{isOpen('results', t) || isOpen('attempt', t) ? 'Close' : 'Results'}</button>
+              <button className="btn secondary small" onClick={() => toggle('leaderboard', t)}>{isOpen('leaderboard', t) ? 'Close' : '🏆 Toppers'}</button>
               <button className="btn danger small" disabled={readOnly} onClick={() => del(t)}>Delete</button>
             </div>
           </div>
@@ -85,6 +86,7 @@ export default function MyTests({ onEdit, onResumeDraft, onCreate, readOnly }) {
               {detail.kind === 'assign' && <AssignPanel test={t} onChanged={load} />}
               {detail.kind === 'results' && <ResultsPanel test={t} onGrade={(attemptId) => setDetail({ kind: 'attempt', test: t, attemptId })} />}
               {detail.kind === 'attempt' && <AttemptPanel test={t} attemptId={detail.attemptId} readOnly={readOnly} onBack={() => setDetail({ kind: 'results', test: t })} />}
+              {detail.kind === 'leaderboard' && <LeaderboardPanel test={t} />}
             </div>
           )}
         </div>
@@ -178,6 +180,37 @@ function ResultsPanel({ test, onGrade }) {
             ))}
           </tbody>
         </table>
+      )}
+    </div>
+  );
+}
+
+function LeaderboardPanel({ test }) {
+  const [data, setData] = useState(null); // { leaderboard, anyPending }
+  useEffect(() => { api('/api/tests/' + test.id + '/leaderboard').then(setData).catch(() => setData({ leaderboard: [] })); }, [test.id]);
+  const medal = (r) => (r === 1 ? '🥇' : r === 2 ? '🥈' : r === 3 ? '🥉' : r);
+  return (
+    <div className="card">
+      <h2 style={{ marginTop: 0 }}>🏆 Toppers — "{test.title}"</h2>
+      {data === null ? <p className="muted">Loading…</p> : data.leaderboard.length === 0 ? (
+        <p className="muted">No students have submitted this test yet.</p>
+      ) : (
+        <>
+          <p className="muted">Top {data.leaderboard.length} student(s) by score.</p>
+          <table>
+            <thead><tr><th>Rank</th><th>Student</th><th>Score</th></tr></thead>
+            <tbody>
+              {data.leaderboard.map((r, i) => (
+                <tr key={i}>
+                  <td style={{ fontSize: r.rank <= 3 ? 18 : 14, fontWeight: 700 }}>{medal(r.rank)}</td>
+                  <td>{r.name}<div className="muted" style={{ fontSize: 12 }}>{r.email}</div></td>
+                  <td><b>{r.score}</b> / {r.maxScore}{r.needsGrading ? <span className="pill amber" style={{ marginLeft: 6 }}>pending grading</span> : null}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {data.anyPending && <p className="muted" style={{ fontSize: 13 }}>Some scores may change after written answers are graded.</p>}
+        </>
       )}
     </div>
   );
