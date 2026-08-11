@@ -25,7 +25,7 @@ function initialsOf(who) {
 export function DashboardBar({ who, orgName, children }) {
   return (
     <div className="topbar">
-      <Link className="brand" to="#" onClick={(e) => e.preventDefault()}>📝 Test<span>Platform</span></Link>
+      <Link className="brand" to="/">📝 Test<span>Platform</span></Link>
       {orgName ? <span className="org-chip">🏢 {orgName}</span> : <span />}
       <div className="row" style={{ gap: 10 }}>
         {who && <span className="avatar" title={who}>{initialsOf(who)}</span>}
