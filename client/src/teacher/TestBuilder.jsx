@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { api } from '../api.js';
 import { Msg, DateTime12 } from '../components.jsx';
 
-const TYPE_LABEL = { mcq: 'Multiple choice', multi: 'Multiple answers', truefalse: 'True / False', short: 'Short answer' };
+const TYPE_LABEL = { mcq: 'Single choice', multi: 'Multiple answers', truefalse: 'True / False', short: 'Short answer' };
 const parseCorrectSet = (raw) => { try { const a = JSON.parse(raw); return Array.isArray(a) ? a.map(Number) : []; } catch { return []; } };
 
 const blankQuestion = (type, points = 1) => ({
@@ -110,10 +110,11 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
   const setOption = (qi, oi, val) => updateQ(qi, { options: questions[qi].options.map((o, idx) => (idx === oi ? val : o)) });
   const addOption = (qi) => updateQ(qi, { options: [...questions[qi].options, ''] });
   function changeType(i, newType) {
+    const keepOptions = (newType === 'multi' || newType === 'mcq');
     updateQ(i, {
       type: newType,
-      options: newType === 'multi' ? (questions[i].options.length ? questions[i].options : ['', '', '', '']) : [],
-      correct: newType === 'multi' ? [] : newType === 'truefalse' ? 'true' : '',
+      options: keepOptions ? (questions[i].options.length ? questions[i].options : ['', '', '', '']) : [],
+      correct: newType === 'mcq' ? 0 : newType === 'multi' ? [] : newType === 'truefalse' ? 'true' : '',
     });
   }
   function addQuestion() {
@@ -267,10 +268,10 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
         <div className="q-card">
           <label>Question type</label>
           <select value={q.type} onChange={(e) => changeType(qIndex, e.target.value)} style={{ width: 'auto' }}>
-            <option value="multi">Multiple answers</option>
+            <option value="mcq">Single choice (one correct)</option>
+            <option value="multi">Multiple answers (one or more correct)</option>
             <option value="truefalse">True / False</option>
             <option value="short">Short answer</option>
-            {q.type === 'mcq' && <option value="mcq">Multiple choice (legacy)</option>}
           </select>
 
           <label>Question text</label>
