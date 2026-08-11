@@ -30,7 +30,7 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
   const [defaultPoints, setDefaultPoints] = useState(1);
   const [sections, setSections] = useState([]);
   const [newSection, setNewSection] = useState('');
-  const [questions, setQuestions] = useState([blankQuestion('multi', 1)]);
+  const [questions, setQuestions] = useState([blankQuestion('mcq', 1)]);
   const [page, setPage] = useState(0); // 0 = details, 1..N = questions, N+1 = review
   const [msg, setMsg] = useState('');
   const [draftId, setDraftId] = useState(propDraftId || null);
@@ -57,7 +57,7 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
         correct: q.type === 'mcq' ? Number(q.correct_answer) : q.type === 'multi' ? parseCorrectSet(q.correct_answer) : q.type === 'truefalse' ? q.correct_answer : '',
         points: q.points, image: q.image_url || '', section: q.section || '', explanation: q.explanation || '',
       }));
-      setQuestions(mapped.length ? mapped : [blankQuestion('multi', 1)]);
+      setQuestions(mapped.length ? mapped : [blankQuestion('mcq', 1)]);
       setDefaultPoints(mapped[0] ? mapped[0].points : 1);
       const secs = []; mapped.forEach((q) => { if (q.section && !secs.includes(q.section)) secs.push(q.section); });
       setSections(secs);
@@ -73,7 +73,7 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
       setProctored(!!s.proctored); setMaxViolations(s.maxViolations > 0 ? s.maxViolations : 3);
       setDefaultPoints(s.defaultPoints > 0 ? s.defaultPoints : 1);
       setSections(Array.isArray(s.sections) ? s.sections : []);
-      setQuestions(Array.isArray(s.questions) && s.questions.length ? s.questions : [blankQuestion('multi', s.defaultPoints || 1)]);
+      setQuestions(Array.isArray(s.questions) && s.questions.length ? s.questions : [blankQuestion('mcq', s.defaultPoints || 1)]);
       setPage(Number.isInteger(s.page) ? s.page : 0);
       setReady(true);
     }
@@ -118,7 +118,7 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
     });
   }
   function addQuestion() {
-    setQuestions((qs) => { const n = [...qs, blankQuestion('multi', Number(defaultPoints) || 1)]; setPage(n.length); return n; });
+    setQuestions((qs) => { const n = [...qs, blankQuestion('mcq', Number(defaultPoints) || 1)]; setPage(n.length); return n; });
   }
   // Changing the default also updates any question still on the previous default
   // (i.e. not individually overridden), so the first pre-created question follows it.
