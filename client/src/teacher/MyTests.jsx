@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { api } from '../api.js';
 import { Msg, fmtDateTime } from '../components.jsx';
+import { MathText } from '../mathText.jsx';
 
 export default function MyTests({ onEdit, onResumeDraft, onCreate, readOnly }) {
   const [tests, setTests] = useState(null);
@@ -277,13 +278,13 @@ function AttemptPanel({ test, attemptId, onBack, readOnly }) {
       {items.map((it, i) => (
         <div className="q-card" key={it.answerId}>
           {it.section && <div className="pill brand" style={{ marginBottom: 8 }}>{it.section}</div>}
-          <h3>Q{i + 1}. {it.prompt} <span className="muted">({it.points} pt)</span></h3>
+          <h3>Q{i + 1}. <MathText text={it.prompt} /> <span className="muted">({it.points} pt)</span></h3>
           {it.image && <img src={it.image} alt="" style={{ maxWidth: 280, maxHeight: 200, border: '1px solid var(--line)', borderRadius: 8, display: 'block', marginBottom: 10 }} />}
           {it.type === 'mcq' && (
             <div>
-              Answered: <b>{it.response === '' ? '—' : (it.options[Number(it.response)] ?? it.response)}</b>{' '}
+              Answered: <b><MathText text={it.response === '' ? '—' : (it.options[Number(it.response)] ?? it.response)} /></b>{' '}
               {it.isCorrect ? <span className="pill green">correct</span> : <span className="pill gray">wrong</span>}<br />
-              <span className="muted">Correct answer: {it.options[Number(it.correctAnswer)] ?? it.correctAnswer}</span>
+              <span className="muted">Correct answer: <MathText text={it.options[Number(it.correctAnswer)] ?? it.correctAnswer} /></span>
             </div>
           )}
           {it.type === 'multi' && (() => {
@@ -297,9 +298,9 @@ function AttemptPanel({ test, attemptId, onBack, readOnly }) {
             };
             return (
               <div>
-                Answered: <b>{fmt(it.response)}</b>{' '}
+                Answered: <b><MathText text={fmt(it.response)} /></b>{' '}
                 {it.isCorrect ? <span className="pill green">correct</span> : <span className="pill gray">wrong</span>}<br />
-                <span className="muted">Correct answers: {fmt(it.correctAnswer)}</span>
+                <span className="muted">Correct answers: <MathText text={fmt(it.correctAnswer)} /></span>
               </div>
             );
           })()}
@@ -313,7 +314,7 @@ function AttemptPanel({ test, attemptId, onBack, readOnly }) {
           {it.type === 'short' && (
             <div>
               <span className="muted">Student wrote:</span>
-              <div style={{ padding: '8px 0' }}><b>{it.response ? it.response : '(blank)'}</b></div>
+              <div style={{ padding: '8px 0' }}><b>{it.response ? <MathText text={it.response} /> : '(blank)'}</b></div>
               <div className="row">
                 <label style={{ margin: 0 }}>Points:</label>
                 <input type="number" min="0" max={it.points} value={grades[it.answerId] ?? 0}
@@ -324,7 +325,7 @@ function AttemptPanel({ test, attemptId, onBack, readOnly }) {
           )}
           {it.explanation && (
             <div className="msg" style={{ background: '#eef2ff', color: 'var(--brand-dark)', marginTop: 10 }}>
-              <b>💡 Explanation:</b> {it.explanation}
+              <b>💡 Explanation:</b> <MathText text={it.explanation} />
             </div>
           )}
         </div>

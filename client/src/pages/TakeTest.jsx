@@ -3,6 +3,7 @@ import { useSearchParams, Link } from 'react-router-dom';
 import { api } from '../api.js';
 import { useRequireRole } from '../auth.js';
 import { DashboardBar, Msg, fmtDateTime } from '../components.jsx';
+import { MathText } from '../mathText.jsx';
 
 // Per-section score table. Only renders when the test actually used sections.
 function SectionBreakdown({ rows }) {
@@ -262,11 +263,11 @@ export default function TakeTest() {
 
         <div className="q-card">
           {q.section && <div className="pill brand" style={{ marginBottom: 8 }}>{q.section}</div>}
-          <h3>Q{current + 1}. {q.prompt} <span className="muted">({q.points} pt)</span></h3>
+          <h3>Q{current + 1}. <MathText text={q.prompt} /> <span className="muted">({q.points} pt)</span></h3>
           {q.image && <img src={q.image} alt="" style={{ maxWidth: '100%', maxHeight: 260, border: '1px solid var(--line)', borderRadius: 8, display: 'block', marginBottom: 10 }} />}
           {q.type === 'mcq' && q.options.map((opt, idx) => (
             <label className="choice" key={idx}>
-              <input type="radio" name={'q' + q.id} checked={answers[q.id] === String(idx)} onChange={() => setAnswer(q.id, String(idx))} /> {opt}
+              <input type="radio" name={'q' + q.id} checked={answers[q.id] === String(idx)} onChange={() => setAnswer(q.id, String(idx))} /> <MathText text={opt} />
             </label>
           ))}
           {q.type === 'multi' && (
@@ -274,7 +275,7 @@ export default function TakeTest() {
               <p className="muted" style={{ margin: '0 0 8px' }}>Select all that apply.</p>
               {q.options.map((opt, idx) => (
                 <label className="choice" key={idx}>
-                  <input type="checkbox" checked={parseSel(answers[q.id]).includes(idx)} onChange={() => toggleMulti(q.id, idx)} /> {opt}
+                  <input type="checkbox" checked={parseSel(answers[q.id]).includes(idx)} onChange={() => toggleMulti(q.id, idx)} /> <MathText text={opt} />
                 </label>
               ))}
             </>

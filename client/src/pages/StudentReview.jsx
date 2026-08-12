@@ -3,6 +3,7 @@ import { useSearchParams, Link } from 'react-router-dom';
 import { api } from '../api.js';
 import { useRequireRole } from '../auth.js';
 import { DashboardBar, Msg } from '../components.jsx';
+import { MathText } from '../mathText.jsx';
 
 // Format an answer value into readable text for a given question type.
 function fmtAnswer(type, value, options) {
@@ -56,21 +57,21 @@ export default function StudentReview() {
           return (
             <div className="q-card" key={i}>
               {it.section && <div className="pill brand" style={{ marginBottom: 8 }}>{it.section}</div>}
-              <h3>Q{i + 1}. {it.prompt} <span className="muted">({it.points} pt)</span></h3>
+              <h3>Q{i + 1}. <MathText text={it.prompt} /> <span className="muted">({it.points} pt)</span></h3>
               {it.image && <img src={it.image} alt="" style={{ maxWidth: '100%', maxHeight: 240, border: '1px solid var(--line)', borderRadius: 8, display: 'block', marginBottom: 10 }} />}
               <div>
-                Your answer: <b>{yours}</b>{' '}
+                Your answer: <b><MathText text={yours} /></b>{' '}
                 {graded
                   ? (it.isCorrect ? <span className="pill green">correct</span> : <span className="pill gray">wrong</span>)
                   : <span className="pill amber">awaiting grading</span>}
                 {' '}<span className="muted">({it.pointsAwarded} / {it.points})</span>
               </div>
               {it.type !== 'short' && (
-                <div className="muted" style={{ marginTop: 4 }}>Correct answer: {correct}</div>
+                <div className="muted" style={{ marginTop: 4 }}>Correct answer: <MathText text={correct} /></div>
               )}
               {it.explanation && (
                 <div className="msg" style={{ background: '#eef2ff', color: 'var(--brand-dark)', marginTop: 10 }}>
-                  <b>💡 Explanation:</b> {it.explanation}
+                  <b>💡 Explanation:</b> <MathText text={it.explanation} />
                 </div>
               )}
             </div>

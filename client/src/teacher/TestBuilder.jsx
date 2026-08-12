@@ -2,6 +2,25 @@ import { useState, useEffect, useRef } from 'react';
 import { api } from '../api.js';
 import { Msg, DateTime12 } from '../components.jsx';
 import { BankPicker } from './QuestionBank.jsx';
+import { MathText } from '../mathText.jsx';
+import DrawingPad from './DrawingPad.jsx';
+
+// Math shortcuts for the builder toolbar. `back` = how many chars to move the
+// caret left after inserting, so it lands inside the first {…} placeholder.
+const MATH_SNIPPETS = [
+  { label: 'x²', ins: '$x^{2}$', back: 2 },
+  { label: 'xⁿ', ins: '$x^{n}$', back: 2 },
+  { label: 'x₁', ins: '$x_{1}$', back: 2 },
+  { label: '√', ins: '$\\sqrt{x}$', back: 2 },
+  { label: 'a/b', ins: '$\\frac{a}{b}$', back: 4 },
+  { label: '∫', ins: '$\\int_{a}^{b} x\\,dx$', back: 9 },
+  { label: 'Σ', ins: '$\\sum_{i=1}^{n}$', back: 2 },
+  { label: 'π', ins: '$\\pi$', back: 1 },
+  { label: 'θ', ins: '$\\theta$', back: 1 },
+  { label: '≤', ins: '$\\leq$', back: 1 },
+  { label: '≥', ins: '$\\geq$', back: 1 },
+  { label: '→', ins: '$\\rightarrow$', back: 1 },
+];
 
 const TYPE_LABEL = { mcq: 'Single choice', multi: 'Multiple answers', truefalse: 'True / False', short: 'Short answer' };
 const parseCorrectSet = (raw) => { try { const a = JSON.parse(raw); return Array.isArray(a) ? a.map(Number) : []; } catch { return []; } };
@@ -39,8 +58,10 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
   const [savedAt, setSavedAt] = useState(null);
   const [showBank, setShowBank] = useState(false);
   const [bankMsg, setBankMsg] = useState('');
+  const [showDraw, setShowDraw] = useState(false);
   const savingRef = useRef(false);
   const lastSnapRef = useRef(null);
+  const promptRef = useRef(null);
 
   const isDraftMode = !editId; // editing a live test does not auto-save drafts
 
@@ -162,6 +183,26 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
       const { url } = await api('/api/upload', 'POST', { dataUrl });
       updateQ(qi, { image: url });
     } catch (e) { alert(e.message); }
+  }
+  // Save a PNG drawn on the pad: upload it and attach as the question image.
+  async function saveDrawing(dataUrl) {
+    setShowDraw(false);
+    try {
+      const { url } = await api('/api/upload', 'POST', { dataUrl });
+      updateQ(qIndex, { image: url });
+    } catch (e) { alert(e.message); }
+  }
+  // Insert a LaTeX snippet into the prompt at the cursor, then place the caret
+  // inside its first placeholder so the teacher can type right away.
+  function insertMath(snippet, back = 0) {
+    const ta = promptRef.current;
+    const cur = questions[qIndex].prompt || '';
+    const s = ta ? ta.selectionStart : cur.length;
+    const e = ta ? ta.selectionEnd : cur.length;
+    const next = cur.slice(0, s) + snippet + cur.slice(e);
+    updateQ(qIndex, { prompt: next });
+    const caret = s + snippet.length - back;
+    requestAnimationFrame(() => { if (ta) { ta.focus(); ta.setSelectionRange(caret, caret); } });
   }
 
   function cleanQuestions() {
@@ -291,16 +332,30 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
           </select>
 
           <label>Question text</label>
-          <textarea value={q.prompt} onChange={(e) => updateQ(qIndex, { prompt: e.target.value })} placeholder="Type the question..." />
+          <textarea ref={promptRef} value={q.prompt} onChange={(e) => updateQ(qIndex, { prompt: e.target.value })} placeholder="Type the question... Wrap math in $…$, e.g. Solve $\int x^2\,dx$" />
+          <div className="row" style={{ gap: 4, flexWrap: 'wrap', marginTop: 6, alignItems: 'center' }}>
+            <span className="muted" style={{ fontSize: 12, marginRight: 2 }}>∑ Math:</span>
+            {MATH_SNIPPETS.map((m) => (
+              <button key={m.label} type="button" className="btn ghost small" title={m.ins} style={{ padding: '2px 8px', minWidth: 0 }} onClick={() => insertMath(m.ins, m.back)}>{m.label}</button>
+            ))}
+            <span className="muted" style={{ fontSize: 12 }}>— or type <code>$…$</code> yourself</span>
+          </div>
 
-          <label>Image (optional)</label>
+          <label>Image or diagram (optional)</label>
           {q.image ? (
             <div style={{ marginTop: 8 }}>
               <img src={q.image} alt="" style={{ maxWidth: 240, maxHeight: 180, border: '1px solid var(--line)', borderRadius: 8, display: 'block' }} />
-              <button className="btn danger small" style={{ marginTop: 6 }} onClick={() => updateQ(qIndex, { image: '' })}>Remove image</button>
+              <div className="row" style={{ gap: 8, marginTop: 6 }}>
+                <button className="btn ghost small" onClick={() => setShowDraw(true)}>✏️ Edit / draw</button>
+                <button className="btn danger small" onClick={() => updateQ(qIndex, { image: '' })}>Remove image</button>
+              </div>
             </div>
           ) : (
-            <input type="file" accept="image/png,image/jpeg,image/gif,image/webp" onChange={(e) => uploadImage(qIndex, e.target.files[0])} />
+            <div className="row" style={{ gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+              <input type="file" accept="image/png,image/jpeg,image/gif,image/webp" onChange={(e) => uploadImage(qIndex, e.target.files[0])} style={{ width: 'auto' }} />
+              <span className="muted">or</span>
+              <button className="btn secondary small" type="button" onClick={() => setShowDraw(true)}>✏️ Draw a diagram</button>
+            </div>
           )}
 
           {sections.length > 0 && (
@@ -365,6 +420,21 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
             <button className="btn ghost small" type="button" onClick={() => saveToBank(qIndex)}>💾 Save this question to the bank</button>
             {bankMsg && <span className="muted">{bankMsg}</span>}
           </div>
+
+          {/* Live preview — exactly how the question renders for students. */}
+          <div style={{ marginTop: 16, padding: 12, background: '#f8fafc', border: '1px solid var(--line)', borderRadius: 8 }}>
+            <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>👁 Student preview</div>
+            <div style={{ fontWeight: 600 }}>Q{page}. <MathText text={q.prompt || 'Your question will appear here.'} /></div>
+            {q.image && <img src={q.image} alt="" style={{ maxWidth: '100%', maxHeight: 220, border: '1px solid var(--line)', borderRadius: 8, display: 'block', margin: '8px 0' }} />}
+            {(q.type === 'mcq' || q.type === 'multi') && (
+              <div style={{ marginTop: 6 }}>
+                {q.options.filter((o) => o.trim() !== '').map((o, oi) => (
+                  <div key={oi} style={{ margin: '2px 0' }}>{q.type === 'mcq' ? '◯' : '☐'} <MathText text={o} /></div>
+                ))}
+              </div>
+            )}
+            {q.explanation && <div className="muted" style={{ marginTop: 6, fontSize: 13 }}>💡 <MathText text={q.explanation} /></div>}
+          </div>
         </div>
       )}
 
@@ -404,6 +474,7 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
       </div>
 
       {showBank && <BankPicker onClose={() => setShowBank(false)} onAdd={addFromBank} />}
+      {showDraw && q && <DrawingPad initial={q.image || null} onClose={() => setShowDraw(false)} onSave={saveDrawing} />}
     </div>
   );
 }
