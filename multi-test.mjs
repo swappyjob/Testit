@@ -44,7 +44,7 @@ async function takeWith(teacher, testId, name, email, answers) {
 }
 
 const teacher = await registerTeacher(BASE, makeJar, call, { name: 'T', email: `t${rand}@x.com`, password: 'secret123' });
-// This suite enrolls 6 students; the org defaults to Free (5 cap), so move it to Basic.
+// This suite enrols several students; move the org to Basic so it's independent of the Free cap.
 const basic = (await call(teacher, '/api/my-org/plan')).plans.find((p) => p.name === 'Basic');
 await call(teacher, '/api/my-org/plan', 'POST', { planId: basic.id });
 

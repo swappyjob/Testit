@@ -231,14 +231,15 @@ async function init() {
   const { rows: [{ c }] } = await pool.query('SELECT COUNT(*)::int AS c FROM plans');
   if (c === 0) {
     await pool.query(`INSERT INTO plans (name, max_students, price_monthly, sort_order) VALUES
-      ('Free',        5,    0,     1),
+      ('Free',        15,   0,     1),
       ('Basic',       100,  10000, 2),
       ('Standard',    300,  24000, 3),
       ('Pro',         750,  52500, 4),
       ('Enterprise',  NULL, 0,     5)`);
   }
-  // The Free trial is capped at 5 students (migrate databases seeded at the old 15).
-  await pool.query("UPDATE plans SET max_students = 5 WHERE name = 'Free' AND max_students = 15");
+  // The free trial (Free plan) allows up to 15 students. Migrate databases
+  // seeded at the earlier 5-student cap up to 15.
+  await pool.query("UPDATE plans SET max_students = 15 WHERE name = 'Free' AND max_students = 5");
 
   // Organization-wide audit log: who changed what (tests, assignments, students,
   // teachers) and when — for transparency across an org's teachers.

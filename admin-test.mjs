@@ -141,20 +141,20 @@ const plans = (await call(admin, '/api/plans')).data.plans;
 if (plans.length < 5 || !plans.find((p) => p.name === 'Basic')) throw new Error('plans not seeded');
 ok('pricing plans are available to the admin');
 
-// New orgs default to the Free plan (5 students).
+// New orgs default to the Free plan (15 students).
 const orgC = (await call(admin, '/api/orgs', 'POST', { name: `Org C ${rand}` })).data;
 const orgCrow = (await call(admin, '/api/orgs')).data.orgs.find((o) => o.id === orgC.id);
-if (orgCrow.planName !== 'Free' || orgCrow.maxStudents !== 5) throw new Error('new org should default to Free');
+if (orgCrow.planName !== 'Free' || orgCrow.maxStudents !== 15) throw new Error('new org should default to Free');
 ok('new organization defaults to the Free plan');
 
-// Assign the Free plan (cap 5) to Org A and enforce the cap.
+// Assign the Free plan (cap 15) to Org A and enforce the cap.
 const freePlan = plans.find((p) => p.name === 'Free');
 await call(admin, '/api/orgs/' + orgA.id + '/plan', 'PUT', { planId: freePlan.id });
 const orgArow = (await call(admin, '/api/orgs')).data.orgs.find((o) => o.id === orgA.id);
-if (orgArow.planName !== 'Free' || orgArow.maxStudents !== 5) throw new Error('plan assignment did not persist');
+if (orgArow.planName !== 'Free' || orgArow.maxStudents !== 15) throw new Error('plan assignment did not persist');
 ok('admin can assign a plan to an organization');
 
-for (let i = orgArow.studentCount; i < 5; i++) {
+for (let i = orgArow.studentCount; i < 15; i++) {
   const r = await call(rootA, '/api/students', 'POST', { name: 'Cap' + i, email: `cap${i}_${rand}@x.com`, phone: '9000000000' });
   if (r.status !== 200) throw new Error('should allow students up to the cap, failed at ' + i);
 }
