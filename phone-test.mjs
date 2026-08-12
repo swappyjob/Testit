@@ -1,3 +1,4 @@
+import { registerTeacher } from './bootstrap.mjs';
 // Tests that a student's phone number is required, stored, and carried to signup.
 const BASE = process.env.TEST_BASE || 'http://localhost:3000';
 function makeJar() {
@@ -23,9 +24,8 @@ async function call(jar, path, method = 'GET', body) {
 }
 const ok = (l) => console.log('  ✓ ' + l);
 const rand = Math.floor(Math.random() * 1e6);
-const teacher = makeJar(), student = makeJar();
-
-await call(teacher, '/api/register-teacher', 'POST', { name: 'T', email: `t${rand}@x.com`, password: 'secret123' });
+const student = makeJar();
+const teacher = await registerTeacher(BASE, makeJar, call, { name: 'T', email: `t${rand}@x.com`, password: 'secret123' });
 
 // Missing phone is rejected
 let rejected = false;

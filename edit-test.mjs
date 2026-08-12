@@ -1,3 +1,4 @@
+import { registerTeacher } from './bootstrap.mjs';
 // Tests the new "edit a test" feature end-to-end.
 const BASE = process.env.TEST_BASE || 'http://localhost:3000';
 function makeJar() {
@@ -23,9 +24,9 @@ async function call(jar, path, method = 'GET', body) {
 }
 const ok = (l) => console.log('  ✓ ' + l);
 const rand = Math.floor(Math.random() * 1e6);
-const teacher = makeJar(), student = makeJar();
+const student = makeJar();
 
-await call(teacher, '/api/register-teacher', 'POST', { name: 'T', email: `t${rand}@x.com`, password: 'secret123' });
+const teacher = await registerTeacher(BASE, makeJar, call, { name: 'T', email: `t${rand}@x.com`, password: 'secret123' });
 const { id: testId } = await call(teacher, '/api/tests', 'POST', {
   title: 'Original Title',
   questions: [
@@ -102,8 +103,7 @@ if (take2.questions.length !== 2 || take2.questions[0].prompt !== 'Capital of Ja
 ok('a new student gets the edited version');
 
 // Non-owner cannot edit
-const other = makeJar();
-await call(other, '/api/register-teacher', 'POST', { name: 'O', email: `o${rand}@x.com`, password: 'secret123' });
+const other = await registerTeacher(BASE, makeJar, call, { name: 'O', email: `o${rand}@x.com`, password: 'secret123' });
 let blocked = false;
 try { await call(other, '/api/tests/' + testId, 'PUT', { title: 'hack', questions: [{ type: 'short', prompt: 'x', points: 1 }] }); }
 catch { blocked = true; }

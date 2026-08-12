@@ -1,3 +1,4 @@
+import { registerTeacher } from './bootstrap.mjs';
 // Tests that an expired organization subscription puts teachers into read-only:
 // all create/edit/delete are blocked (403), reads still work.
 import pg from 'pg';
@@ -28,8 +29,7 @@ const ok = (l) => console.log('  ✓ ' + l);
 const rand = Math.floor(Math.random() * 1e6);
 const Q = [{ type: 'multi', prompt: 'q', options: ['a', 'b'], correct: [0], points: 1 }];
 
-const root = makeJar();
-await call(root, '/api/register-teacher', 'POST', { name: 'Sub', email: `sub${rand}@x.com`, password: 'secret123' });
+const root = await registerTeacher(BASE, makeJar, call, { name: 'Sub', email: `sub${rand}@x.com`, password: 'secret123' });
 const me = (await call(root, '/api/me')).data.user;
 const orgId = me.orgId;
 if (me.subscriptionExpired) throw new Error('a new org should not be expired');

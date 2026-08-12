@@ -1,3 +1,4 @@
+import { registerTeacher } from './bootstrap.mjs';
 // Tests server-side search of students by name and email.
 const BASE = process.env.TEST_BASE || 'http://localhost:3000';
 function makeJar() {
@@ -23,9 +24,7 @@ async function call(jar, path, method = 'GET', body) {
 }
 const ok = (l) => console.log('  ✓ ' + l);
 const rand = Math.floor(Math.random() * 1e6);
-const teacher = makeJar(), other = makeJar();
-
-await call(teacher, '/api/register-teacher', 'POST', { name: 'T', email: `t${rand}@x.com`, password: 'secret123' });
+const teacher = await registerTeacher(BASE, makeJar, call, { name: 'T', email: `t${rand}@x.com`, password: 'secret123' });
 const mk = (name, email) => call(teacher, '/api/students', 'POST', { name, email, phone: '9000000000' });
 await mk('Alice Johnson', `alice${rand}@school.com`);
 await mk('Bob Smith', `bob${rand}@school.com`);
@@ -65,7 +64,7 @@ if (r.students.length !== 0) throw new Error('literal % should match none, got '
 ok('LIKE wildcard is escaped (literal match)');
 
 // search is scoped to the teacher's own students
-await call(other, '/api/register-teacher', 'POST', { name: 'O', email: `o${rand}@x.com`, password: 'secret123' });
+const other = await registerTeacher(BASE, makeJar, call, { name: 'O', email: `o${rand}@x.com`, password: 'secret123' });
 r = await call(other, '/api/students?q=' + encodeURIComponent('Alice'));
 if (r.students.length !== 0) throw new Error('another teacher saw someone else’s students');
 ok('search only returns the current teacher’s students');

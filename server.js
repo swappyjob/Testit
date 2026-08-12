@@ -235,7 +235,11 @@ const publicUser = (u) => ({
 // ============================================================================
 // AUTH
 // ============================================================================
-app.post('/api/register-teacher', h(async (req, res) => {
+// Admin-only: create a new organization and its root teacher in one step.
+// There is deliberately NO public/self-service org sign-up — only a platform
+// admin can create organizations. (Does not log the new teacher in; the admin
+// hands over the credentials, or the teacher logs in themselves afterward.)
+app.post('/api/register-teacher', requireAdmin, h(async (req, res) => {
   const name = (req.body.name || '').trim();
   const email = (req.body.email || '').trim().toLowerCase();
   const password = req.body.password || '';
@@ -246,8 +250,6 @@ app.post('/api/register-teacher', h(async (req, res) => {
   if (await get('SELECT id FROM users WHERE email = ?', [email]))
     return res.status(409).json({ error: 'An account with that email already exists.' });
 
-  // Bootstrap/dev entry point (not exposed in the UI): create a fresh
-  // organization and make this teacher its root teacher.
   const { newId, orgId } = await tx(async (t) => {
     const oid = (await t.run(
       "INSERT INTO organizations (name, plan_id) VALUES (?, (SELECT id FROM plans WHERE name = 'Free')) RETURNING id",
@@ -259,7 +261,6 @@ app.post('/api/register-teacher', h(async (req, res) => {
     )).rows[0].id;
     return { newId: uid, orgId: oid };
   });
-  await startSession(res, newId);
   res.json({ user: { id: newId, role: 'teacher', name, email, isRoot: true, orgId } });
 }));
 

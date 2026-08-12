@@ -1,3 +1,4 @@
+import { registerTeacher } from './bootstrap.mjs';
 // Tests disabling/enabling a student and its effect on login + sessions.
 const BASE = process.env.TEST_BASE || 'http://localhost:3000';
 function makeJar() {
@@ -23,10 +24,10 @@ async function call(jar, path, method = 'GET', body, expectOk = true) {
 }
 const ok = (l) => console.log('  ✓ ' + l);
 const rand = Math.floor(Math.random() * 1e6);
-const teacher = makeJar(), student = makeJar();
+const student = makeJar();
 const email = `stud${rand}@x.com`;
 
-await call(teacher, '/api/register-teacher', 'POST', { name: 'T', email: `t${rand}@x.com`, password: 'secret123' });
+const teacher = await registerTeacher(BASE, makeJar, call, { name: 'T', email: `t${rand}@x.com`, password: 'secret123' });
 const { data: { token } } = await call(teacher, '/api/students', 'POST', { name: 'Ravi', email, phone: '9000000000' });
 await call(student, '/api/signup/' + token, 'POST', { password: 'pass123' });
 const studentId = (await call(teacher, '/api/students')).data.students.find((s) => s.email === email).studentId;
@@ -65,8 +66,7 @@ if (r.status !== 200) throw new Error('re-enabled login should succeed, got ' + 
 ok('re-enabled student can log in again');
 
 // A teacher cannot disable a student they do not own
-const other = makeJar();
-await call(other, '/api/register-teacher', 'POST', { name: 'O', email: `o${rand}@x.com`, password: 'secret123' });
+const other = await registerTeacher(BASE, makeJar, call, { name: 'O', email: `o${rand}@x.com`, password: 'secret123' });
 r = await call(other, '/api/students/' + studentId, 'PATCH', { disabled: true }, false);
 if (r.status !== 404) throw new Error('non-owner should get 404, got ' + r.status);
 ok('a teacher cannot disable another teacher’s student');

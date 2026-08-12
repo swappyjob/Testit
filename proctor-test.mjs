@@ -1,3 +1,4 @@
+import { registerTeacher } from './bootstrap.mjs';
 // Tests proctoring: per-test flags are stored and exposed to the student,
 // and violation counts are recorded on submit and shown to the teacher.
 const BASE = process.env.TEST_BASE || 'http://localhost:3000';
@@ -38,8 +39,7 @@ async function takeAndSubmit(teacher, testId, name, email, violations) {
   return { take, result };
 }
 
-const teacher = makeJar();
-await call(teacher, '/api/register-teacher', 'POST', { name: 'P', email: `p${rand}@x.com`, password: 'secret123' });
+const teacher = await registerTeacher(BASE, makeJar, call, { name: 'P', email: `p${rand}@x.com`, password: 'secret123' });
 
 // A proctored test with a 2-violation limit.
 const { id: testId } = await call(teacher, '/api/tests', 'POST', { title: 'Proctored', proctored: true, maxViolations: 2, questions: Q });

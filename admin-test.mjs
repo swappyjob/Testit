@@ -1,3 +1,4 @@
+import { registerTeacher } from './bootstrap.mjs';
 // Tests the root-admin module: organizations, root teachers, and org isolation.
 import { execSync } from 'node:child_process';
 import path from 'node:path';
@@ -39,12 +40,19 @@ if (adminUser.role !== 'admin') throw new Error('admin login role wrong');
 ok('root admin created and logged in');
 
 // A normal teacher cannot use admin endpoints.
-const rando = makeJar();
-await call(rando, '/api/register-teacher', 'POST', { name: 'R', email: `r${rand}@x.com`, password: 'secret123' });
+const rando = await registerTeacher(BASE, makeJar, call, { name: 'R', email: `r${rand}@x.com`, password: 'secret123' });
 if ((await call(rando, '/api/orgs', 'GET', undefined, false)).status !== 403) throw new Error('teacher should be 403 on /api/orgs');
 if ((await call(rando, '/api/admin/root-teachers', 'POST', { orgId: 1, name: 'x', email: `z${rand}@x.com`, phone: '9' }, false)).status !== 403)
   throw new Error('teacher should be 403 creating root teachers');
 ok('non-admin is blocked from admin endpoints (403)');
+
+// Org creation is admin-only: neither an anonymous visitor nor a plain teacher
+// can self-register an organization.
+if ((await call(makeJar(), '/api/register-teacher', 'POST', { name: 'Sneaky', email: `sneak${rand}@x.com`, password: 'secret123' }, false)).status !== 401)
+  throw new Error('anonymous org creation should be blocked (401)');
+if ((await call(rando, '/api/register-teacher', 'POST', { name: 'Sneaky', email: `sneak2_${rand}@x.com`, password: 'secret123' }, false)).status !== 403)
+  throw new Error('a plain teacher must not create organizations (403)');
+ok('org creation is admin-only — no public self-signup (anon 401, teacher 403)');
 
 // --- An admin can create other admins ---
 if ((await call(rando, '/api/admins', 'GET', undefined, false)).status !== 403) throw new Error('teacher should be 403 on GET /api/admins');

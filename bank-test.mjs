@@ -1,3 +1,4 @@
+import { registerTeacher } from './bootstrap.mjs';
 // Tests the org-wide question bank: CRUD, filters, org sharing + isolation.
 const BASE = process.env.TEST_BASE || 'http://localhost:3000';
 function makeJar() {
@@ -25,8 +26,7 @@ const ok = (l) => console.log('  ✓ ' + l);
 const rand = Math.floor(Math.random() * 1e6);
 const listIds = async (jar, qs = '') => (await call(jar, '/api/bank' + qs)).data.questions.map((x) => x.id);
 
-const t1 = makeJar();
-await call(t1, '/api/register-teacher', 'POST', { name: 'T1', email: `t1_${rand}@x.com`, password: 'secret123' });
+const t1 = await registerTeacher(BASE, makeJar, call, { name: 'T1', email: `t1_${rand}@x.com`, password: 'secret123' });
 
 // Create a single-choice question with a blank option (should be dropped).
 const id = (await call(t1, '/api/bank', 'POST', {
@@ -59,8 +59,7 @@ if (!(await listIds(t1b)).includes(id)) throw new Error('same-org teacher should
 ok('the bank is shared across the organization');
 
 // Org isolation: a teacher in a different org does not see it.
-const t2 = makeJar();
-await call(t2, '/api/register-teacher', 'POST', { name: 'T2', email: `t2_${rand}@x.com`, password: 'secret123' });
+const t2 = await registerTeacher(BASE, makeJar, call, { name: 'T2', email: `t2_${rand}@x.com`, password: 'secret123' });
 if ((await listIds(t2)).includes(id)) throw new Error('another org should not see the bank question');
 if ((await call(t2, '/api/bank/' + id, 'PUT', { type: 'short', prompt: 'x', points: 1 }, false)).status !== 404)
   throw new Error('another org editing should be 404');

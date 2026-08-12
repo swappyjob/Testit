@@ -1,3 +1,4 @@
+import { registerTeacher } from './bootstrap.mjs';
 // Tests root-teacher management: inviting teachers (root/normal), phone, permissions.
 import { execSync } from 'node:child_process';
 import path from 'node:path';
@@ -29,14 +30,8 @@ async function call(jar, path_, method = 'GET', body, expectOk = true) {
 const ok = (l) => console.log('  ✓ ' + l);
 const rand = Math.floor(Math.random() * 1e6);
 
-const root = makeJar();
 const email = `root${rand}@x.com`;
-const reg = await call(root, '/api/register-teacher', 'POST', { name: 'Root', email, password: 'secret123' });
-
-// Ensure we're acting as a root teacher (promote via the admin script if a root already exists).
-if (!reg.data.user.isRoot) {
-  execSync(`"${process.execPath}" "${path.join(__dirname, 'make-root.mjs')}" ${email}`, { stdio: 'ignore' });
-}
+const root = await registerTeacher(BASE, makeJar, call, { name: 'Root', email, password: 'secret123' });
 const me = (await call(root, '/api/me')).data.user;
 if (!me.isRoot) throw new Error('could not obtain a root teacher for the test');
 ok('acting as a root teacher');

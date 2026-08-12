@@ -1,3 +1,4 @@
+import { registerTeacher } from './bootstrap.mjs';
 // Tests resumable test-creation drafts: create, list, update, resume, scope, delete.
 const BASE = process.env.TEST_BASE || 'http://localhost:3000';
 function makeJar() {
@@ -24,10 +25,8 @@ async function call(jar, path, method = 'GET', body, expectOk = true) {
 const ok = (l) => console.log('  ✓ ' + l);
 const rand = Math.floor(Math.random() * 1e6);
 
-const t1 = makeJar();
-await call(t1, '/api/register-teacher', 'POST', { name: 'D1', email: `d1_${rand}@x.com`, password: 'secret123' });
-const t2 = makeJar();
-await call(t2, '/api/register-teacher', 'POST', { name: 'D2', email: `d2_${rand}@x.com`, password: 'secret123' });
+const t1 = await registerTeacher(BASE, makeJar, call, { name: 'D1', email: `d1_${rand}@x.com`, password: 'secret123' });
+const t2 = await registerTeacher(BASE, makeJar, call, { name: 'D2', email: `d2_${rand}@x.com`, password: 'secret123' });
 
 // Create a draft.
 const id = (await call(t1, '/api/drafts', 'POST', { title: 'WIP quiz', data: JSON.stringify({ title: 'WIP quiz', page: 2 }) })).data.id;

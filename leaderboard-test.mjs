@@ -1,3 +1,4 @@
+import { registerTeacher } from './bootstrap.mjs';
 // Tests the per-test toppers board: top students ranked by score (ties share a rank).
 const BASE = process.env.TEST_BASE || 'http://localhost:3000';
 function makeJar() {
@@ -37,8 +38,7 @@ async function studentSubmit(teacher, testId, name, email, answersByPrompt) {
   return s;
 }
 
-const teacher = makeJar();
-await call(teacher, '/api/register-teacher', 'POST', { name: 'T', email: `t${rand}@x.com`, password: 'secret123' });
+const teacher = await registerTeacher(BASE, makeJar, call, { name: 'T', email: `t${rand}@x.com`, password: 'secret123' });
 const { id: testId } = (await call(teacher, '/api/tests', 'POST', {
   title: 'Ranked', questions: [
     { type: 'truefalse', prompt: 'A', correct: 'true', points: 1 },

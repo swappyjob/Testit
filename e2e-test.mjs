@@ -1,3 +1,4 @@
+import { registerTeacher } from './bootstrap.mjs';
 // Quick end-to-end test of the whole flow. Run while the server is up.
 const BASE = process.env.TEST_BASE || 'http://localhost:3000';
 
@@ -30,11 +31,10 @@ async function call(jar, path, method = 'GET', body) {
 const ok = (label) => console.log('  ✓ ' + label);
 const rand = Math.floor(Math.random() * 1e6);
 
-const teacher = makeJar();
 const student = makeJar();
 
-// 1. Teacher registers
-await call(teacher, '/api/register-teacher', 'POST', {
+// 1. Admin creates the teacher's organization, then the teacher logs in
+const teacher = await registerTeacher(BASE, makeJar, call, {
   name: 'Ms Sharma', email: `teacher${rand}@example.com`, password: 'secret123',
 });
 ok('teacher registered & logged in');

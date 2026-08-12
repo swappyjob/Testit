@@ -1,3 +1,4 @@
+import { registerTeacher } from './bootstrap.mjs';
 // Tests editing a student (name/phone/access), email immutable, permissions.
 const BASE = process.env.TEST_BASE || 'http://localhost:3000';
 function makeJar() {
@@ -29,8 +30,7 @@ function ymd(offsetDays) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
-const teacher = makeJar();
-await call(teacher, '/api/register-teacher', 'POST', { name: 'T', email: `t${rand}@x.com`, password: 'secret123' });
+const teacher = await registerTeacher(BASE, makeJar, call, { name: 'T', email: `t${rand}@x.com`, password: 'secret123' });
 
 // Create + sign up a student with a future access date.
 const email = `st${rand}@x.com`;
@@ -80,8 +80,7 @@ if (p1.name !== 'Pending Edited' || p1.phone !== '9222222222') throw new Error('
 ok('a pending student can be edited too');
 
 // Another teacher cannot edit this student.
-const other = makeJar();
-await call(other, '/api/register-teacher', 'POST', { name: 'O', email: `o${rand}@x.com`, password: 'secret123' });
+const other = await registerTeacher(BASE, makeJar, call, { name: 'O', email: `o${rand}@x.com`, password: 'secret123' });
 if ((await call(other, '/api/students/' + s0.id, 'PUT', { name: 'Z', phone: '9000000000' }, false)).status !== 404)
   throw new Error('non-owner edit should be 404');
 ok('a teacher cannot edit another teachers student');

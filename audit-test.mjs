@@ -1,3 +1,4 @@
+import { registerTeacher } from './bootstrap.mjs';
 // Tests org-wide audit logging: test create/edit/delete/assign, student add/disable,
 // teacher invite — all visible to every teacher in the org, with search + org isolation.
 const BASE = process.env.TEST_BASE || 'http://localhost:3000';
@@ -28,8 +29,7 @@ const logs = (jar, q) => call(jar, '/api/audit' + (q ? '?q=' + encodeURIComponen
 const has = (arr, action, pred = () => true) => arr.some((l) => l.action === action && pred(l));
 
 // --- Org A: root teacher does a bunch of actions ---
-const root = makeJar();
-await call(root, '/api/register-teacher', 'POST', { name: 'RootA', email: `root${rand}@a.com`, password: 'secret123' });
+const root = await registerTeacher(BASE, makeJar, call, { name: 'RootA', email: `root${rand}@a.com`, password: 'secret123' });
 
 // Empty to start.
 if ((await logs(root)).length !== 0) throw new Error('audit log should start empty for a new org');
@@ -88,8 +88,7 @@ if (searched.length === 0 || !searched.every((l) => /Stu/i.test(l.actor + l.enti
 ok('search filters the audit log');
 
 // --- Org isolation: a teacher in another org sees none of org A's activity ---
-const rootB = makeJar();
-await call(rootB, '/api/register-teacher', 'POST', { name: 'RootB', email: `root${rand}@b.com`, password: 'secret123' });
+const rootB = await registerTeacher(BASE, makeJar, call, { name: 'RootB', email: `root${rand}@b.com`, password: 'secret123' });
 const bLogs = await logs(rootB);
 if (bLogs.some((l) => /@a\.com/.test(l.details) || /Quiz/.test(l.entityLabel))) throw new Error("org B must not see org A's audit entries");
 ok("audit logs are org-scoped (org B can't see org A)");

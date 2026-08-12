@@ -1,3 +1,4 @@
+import { registerTeacher } from './bootstrap.mjs';
 // Tests per-question sections end-to-end: storage/round-trip, exposure to
 // students while taking, and exposure in the teacher's attempt review.
 const BASE = process.env.TEST_BASE || 'http://localhost:3000';
@@ -25,8 +26,7 @@ async function call(jar, path, method = 'GET', body) {
 const ok = (l) => console.log('  ✓ ' + l);
 const rand = Math.floor(Math.random() * 1e6);
 
-const teacher = makeJar();
-await call(teacher, '/api/register-teacher', 'POST', { name: 'T', email: `t${rand}@x.com`, password: 'secret123' });
+const teacher = await registerTeacher(BASE, makeJar, call, { name: 'T', email: `t${rand}@x.com`, password: 'secret123' });
 
 // A test whose questions belong to different sections (one left unsectioned).
 const { id: testId } = await call(teacher, '/api/tests', 'POST', {

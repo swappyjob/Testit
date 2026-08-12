@@ -1,3 +1,4 @@
+import { registerTeacher } from './bootstrap.mjs';
 // Tests the per-student access end date (auto-disable after the date).
 const BASE = process.env.TEST_BASE || 'http://localhost:3000';
 function makeJar() {
@@ -31,8 +32,7 @@ function ymd(offsetDays) {
 const PAST = ymd(-1);
 const FUTURE = ymd(1);
 
-const teacher = makeJar();
-await call(teacher, '/api/register-teacher', 'POST', { name: 'T', email: `t${rand}@x.com`, password: 'secret123' });
+const teacher = await registerTeacher(BASE, makeJar, call, { name: 'T', email: `t${rand}@x.com`, password: 'secret123' });
 
 async function makeStudent(label, email, accessUntil) {
   const tok = (await call(teacher, '/api/students', 'POST', { name: label, email, phone: '9000000000', accessUntil })).data.token;

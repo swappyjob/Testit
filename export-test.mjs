@@ -1,3 +1,4 @@
+import { registerTeacher } from './bootstrap.mjs';
 // Tests the students CSV export.
 const BASE = process.env.TEST_BASE || 'http://localhost:3000';
 function makeJar() {
@@ -23,9 +24,9 @@ async function call(jar, path, method = 'GET', body) {
 }
 const ok = (l) => console.log('  ✓ ' + l);
 const rand = Math.floor(Math.random() * 1e6);
-const teacher = makeJar(), student = makeJar();
+const student = makeJar();
 
-await call(teacher, '/api/register-teacher', 'POST', { name: 'T', email: `t${rand}@x.com`, password: 'secret123' });
+const teacher = await registerTeacher(BASE, makeJar, call, { name: 'T', email: `t${rand}@x.com`, password: 'secret123' });
 // A name with a comma to test CSV escaping.
 await call(teacher, '/api/students', 'POST', { name: 'Doe, John', email: `john${rand}@x.com`, phone: '+91 90000 11111' });
 const { token } = await call(teacher, '/api/students', 'POST', { name: 'Asha', email: `asha${rand}@x.com`, phone: '9000022222' });
@@ -58,8 +59,7 @@ if (!/Doe, John.*Invite pending/.test(body)) throw new Error('pending row wrong'
 ok('signup and account status columns correct');
 
 // Export is scoped to the teacher
-const other = makeJar();
-await call(other, '/api/register-teacher', 'POST', { name: 'O', email: `o${rand}@x.com`, password: 'secret123' });
+const other = await registerTeacher(BASE, makeJar, call, { name: 'O', email: `o${rand}@x.com`, password: 'secret123' });
 const res2 = await fetch(BASE + '/api/students/export.csv', { headers: { cookie: other.header() } });
 const body2 = (await res2.text()).replace(/^﻿/, '').trim();
 if (body2.split('\r\n').length !== 1) throw new Error('other teacher should get only the header row');

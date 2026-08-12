@@ -1,3 +1,4 @@
+import { registerTeacher } from './bootstrap.mjs';
 // Tests the per-test end date (deadline) enforcement.
 const BASE = process.env.TEST_BASE || 'http://localhost:3000';
 function makeJar() {
@@ -33,8 +34,8 @@ function localDT(offsetMs) {
 const PAST = localDT(-60 * 60 * 1000);      // 1 hour ago
 const FUTURE = localDT(24 * 60 * 60 * 1000); // tomorrow
 
-const teacher = makeJar(), student = makeJar();
-await call(teacher, '/api/register-teacher', 'POST', { name: 'T', email: `t${rand}@x.com`, password: 'secret123' });
+const student = makeJar();
+const teacher = await registerTeacher(BASE, makeJar, call, { name: 'T', email: `t${rand}@x.com`, password: 'secret123' });
 
 const mkTest = (title, dueDate) => call(teacher, '/api/tests', 'POST', {
   title, dueDate,

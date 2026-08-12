@@ -2,14 +2,20 @@
 // screen. Everything goes through the normal HTTP API (no direct DB writes), so
 // it only ADDS one isolated org and cannot corrupt existing data.
 //
-//   node seed-demo.mjs                      # seeds http://localhost:3000
-//   node seed-demo.mjs https://your-live-url
+// Org creation is admin-only, so you must supply platform-admin credentials:
+//   node seed-demo.mjs <baseUrl> <adminEmail> <adminPassword>
+//   node seed-demo.mjs https://your-live-url admin@you.com 'yourpass'
+// (or set DEMO_ADMIN_EMAIL / DEMO_ADMIN_PASSWORD in the environment)
 //
 // Safe to point at production. If the demo teacher already exists it exits
 // without changing anything (so you can't accidentally double-seed).
 import zlib from 'node:zlib';
 
 const BASE = (process.argv[2] || process.env.DEMO_BASE || 'http://localhost:3000').replace(/\/$/, '');
+const ADMIN = {
+  email: process.argv[3] || process.env.DEMO_ADMIN_EMAIL || '',
+  password: process.argv[4] || process.env.DEMO_ADMIN_PASSWORD || '',
+};
 
 // ---- Demo identity (surfaced at the end so you can log in and present) ----
 const ORG_TEACHER = { name: 'Dr. Anjali Verma', email: 'demo.teacher@brightfuture.in', password: 'demo1234' };
@@ -108,9 +114,22 @@ const log = (m) => console.log(m);
 async function run() {
   log(`\nSeeding demo org at ${BASE} ...\n`);
 
-  // 1) Root teacher + organization. Abort cleanly if already seeded.
-  const teacher = makeJar();
-  const reg = await call(teacher, '/api/register-teacher', 'POST', ORG_TEACHER, false);
+  // 1) Log in as the platform admin (org creation is admin-only).
+  if (!ADMIN.email || !ADMIN.password) {
+    log('❌ Admin credentials required. Run:');
+    log('   node seed-demo.mjs <baseUrl> <adminEmail> <adminPassword>');
+    log('   (or set DEMO_ADMIN_EMAIL / DEMO_ADMIN_PASSWORD)\n');
+    process.exit(1);
+  }
+  const admin = makeJar();
+  const login = await call(admin, '/api/login', 'POST', { email: ADMIN.email, password: ADMIN.password }, false);
+  if (login.status !== 200 || (login.data.user && login.data.user.role !== 'admin')) {
+    log('❌ Could not log in as an admin with those credentials.\n');
+    process.exit(1);
+  }
+
+  // 2) Create the org + root teacher (admin-only), then log in as that teacher.
+  const reg = await call(admin, '/api/register-teacher', 'POST', ORG_TEACHER, false);
   if (reg.status === 409) {
     log('⚠  A demo teacher with that email already exists — nothing was changed.');
     log(`   Log in at ${BASE}/teacher-login as ${ORG_TEACHER.email}`);
@@ -118,6 +137,8 @@ async function run() {
     process.exit(1);
   }
   if (reg.status !== 200) throw new Error('register failed: ' + JSON.stringify(reg.data));
+  const teacher = makeJar();
+  await call(teacher, '/api/login', 'POST', { email: ORG_TEACHER.email, password: ORG_TEACHER.password });
   log(`✓ Created organization + root teacher (${ORG_TEACHER.name})`);
 
   // 2) Put the org on the Pro plan so it isn't capped (10 students > Free's 5).

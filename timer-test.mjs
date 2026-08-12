@@ -1,3 +1,4 @@
+import { registerTeacher } from './bootstrap.mjs';
 // Tests the per-test timer: server-anchored start, resume, and single attempt.
 import { execSync } from 'node:child_process';
 import path from 'node:path';
@@ -29,10 +30,8 @@ async function call(jar, path_, method = 'GET', body, expectOk = true) {
 const ok = (l) => console.log('  ✓ ' + l);
 const rand = Math.floor(Math.random() * 1e6);
 
-const teacher = makeJar();
 const tEmail = `rt${rand}@x.com`;
-const reg = await call(teacher, '/api/register-teacher', 'POST', { name: 'RT', email: tEmail, password: 'secret123' });
-if (!reg.data.user.isRoot) execSync(`"${process.execPath}" "${path.join(__dirname, 'make-root.mjs')}" ${tEmail}`, { stdio: 'ignore' });
+const teacher = await registerTeacher(BASE, makeJar, call, { name: 'RT', email: tEmail, password: 'secret123' });
 if (!(await call(teacher, '/api/me')).data.user.isRoot) throw new Error('need root teacher');
 
 const MCQ = { type: 'mcq', prompt: 'Pick A', options: ['A', 'B'], correct: 0, points: 1 };

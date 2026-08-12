@@ -1,3 +1,4 @@
+import { registerTeacher } from './bootstrap.mjs';
 // Tests the change-password flow.
 const BASE = process.env.TEST_BASE || 'http://localhost:3000';
 function makeJar() {
@@ -26,8 +27,7 @@ const rand = Math.floor(Math.random() * 1e6);
 const email = `t${rand}@x.com`;
 
 // Session A logs in by registering
-const a = makeJar();
-await call(a, '/api/register-teacher', 'POST', { name: 'T', email, password: 'oldpass1' });
+const a = await registerTeacher(BASE, makeJar, call, { name: 'T', email, password: 'oldpass1' });
 // Session B: a second login for the same account (simulating another device)
 const b = makeJar();
 await call(b, '/api/login', 'POST', { email, password: 'oldpass1' });

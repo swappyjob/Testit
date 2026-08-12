@@ -1,3 +1,4 @@
+import { registerTeacher } from './bootstrap.mjs';
 // Tests the student's post-submission review: they can see all questions, their
 // answers, and the correct answers only after submitting — and only their own.
 const BASE = process.env.TEST_BASE || 'http://localhost:3000';
@@ -32,8 +33,7 @@ async function makeStudent(teacher, name, email) {
   return { jar, user };
 }
 
-const teacher = makeJar();
-await call(teacher, '/api/register-teacher', 'POST', { name: 'R', email: `r${rand}@x.com`, password: 'secret123' });
+const teacher = await registerTeacher(BASE, makeJar, call, { name: 'R', email: `r${rand}@x.com`, password: 'secret123' });
 const { id: testId } = (await call(teacher, '/api/tests', 'POST', {
   title: 'Reviewable', questions: [
     { type: 'multi', prompt: 'Pick A', options: ['A', 'B'], correct: [0], points: 1, explanation: 'A is the right choice because it is first.' },

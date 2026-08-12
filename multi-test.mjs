@@ -1,3 +1,4 @@
+import { registerTeacher } from './bootstrap.mjs';
 // Tests multiple-answer (checkbox) questions end-to-end:
 // storage, no answer-key leak to students, all-or-nothing grading, negative marking.
 const BASE = process.env.TEST_BASE || 'http://localhost:3000';
@@ -42,8 +43,7 @@ async function takeWith(teacher, testId, name, email, answers) {
   return { take, result: await call(student, '/api/submit/' + aid, 'POST', { answers: payload }) };
 }
 
-const teacher = makeJar();
-await call(teacher, '/api/register-teacher', 'POST', { name: 'T', email: `t${rand}@x.com`, password: 'secret123' });
+const teacher = await registerTeacher(BASE, makeJar, call, { name: 'T', email: `t${rand}@x.com`, password: 'secret123' });
 // This suite enrolls 6 students; the org defaults to Free (5 cap), so move it to Basic.
 const basic = (await call(teacher, '/api/my-org/plan')).plans.find((p) => p.name === 'Basic');
 await call(teacher, '/api/my-org/plan', 'POST', { planId: basic.id });

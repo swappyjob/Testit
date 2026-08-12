@@ -1,3 +1,4 @@
+import { registerTeacher } from './bootstrap.mjs';
 // Tests password reset: admin-generated links, the reset flow, and permissions.
 import { execSync } from 'node:child_process';
 import path from 'node:path';
@@ -31,10 +32,8 @@ const tokenOf = (resetPath) => new URLSearchParams(resetPath.split('?')[1]).get(
 const rand = Math.floor(Math.random() * 1e6);
 
 // Act as a root teacher.
-const teacher = makeJar();
 const tEmail = `rt${rand}@x.com`;
-const reg = await call(teacher, '/api/register-teacher', 'POST', { name: 'RT', email: tEmail, password: 'secret123' });
-if (!reg.data.user.isRoot) execSync(`"${process.execPath}" "${path.join(__dirname, 'make-root.mjs')}" ${tEmail}`, { stdio: 'ignore' });
+const teacher = await registerTeacher(BASE, makeJar, call, { name: 'RT', email: tEmail, password: 'secret123' });
 const me = (await call(teacher, '/api/me')).data.user;
 if (!me.isRoot) throw new Error('could not obtain a root teacher');
 ok('acting as a root teacher');
@@ -93,9 +92,8 @@ if ((await call(makeJar(), '/api/reset/' + tokenOf(rp2), 'POST', { password: '12
 ok('short new password rejected');
 
 // Permissions: another (normal) teacher cannot reset this student, nor reset teachers.
-const other = makeJar();
 const oEmail = `ot${rand}@x.com`;
-await call(other, '/api/register-teacher', 'POST', { name: 'OT', email: oEmail, password: 'secret123' });
+const other = await registerTeacher(BASE, makeJar, call, { name: 'OT', email: oEmail, password: 'secret123' });
 if ((await call(other, '/api/students/' + su.id + '/reset-link', 'POST', undefined, false)).status !== 404)
   throw new Error('non-owning teacher should get 404');
 // "other" is a root teacher of a different org, so it cannot reset a teacher in this org.

@@ -1,3 +1,4 @@
+import { registerTeacher } from './bootstrap.mjs';
 // Tests the negative-marking feature end-to-end.
 const BASE = process.env.TEST_BASE || 'http://localhost:3000';
 function makeJar() {
@@ -39,8 +40,7 @@ async function makeStudentAndTake(teacher, testId, name, email, answers) {
   return { take, result: await call(student, '/api/submit/' + aid, 'POST', { answers: payload }) };
 }
 
-const teacher = makeJar();
-await call(teacher, '/api/register-teacher', 'POST', { name: 'T', email: `t${rand}@x.com`, password: 'secret123' });
+const teacher = await registerTeacher(BASE, makeJar, call, { name: 'T', email: `t${rand}@x.com`, password: 'secret123' });
 
 // Test WITH negative marking: penalty 2 per wrong answer.
 const { id: testId } = await call(teacher, '/api/tests', 'POST', {

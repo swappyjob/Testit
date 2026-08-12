@@ -1,3 +1,4 @@
+import { registerTeacher } from './bootstrap.mjs';
 // Verifies the math + drawing feature end to end at the data layer:
 // LaTeX typed into prompts/options is stored verbatim, and a PNG produced by the
 // drawing pad uploads through /api/upload and attaches as the question image.
@@ -28,8 +29,7 @@ const rand = Math.floor(Math.random() * 1e6);
 // A 1x1 transparent PNG — stands in for a canvas drawing export.
 const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
 
-const teacher = makeJar();
-await call(teacher, '/api/register-teacher', 'POST', { name: 'T', email: `t${rand}@x.com`, password: 'secret123' });
+const teacher = await registerTeacher(BASE, makeJar, call, { name: 'T', email: `t${rand}@x.com`, password: 'secret123' });
 
 // A drawing uploads and returns a safe /uploads/ URL.
 const { url } = (await call(teacher, '/api/upload', 'POST', { dataUrl: PNG })).data;
