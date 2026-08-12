@@ -240,6 +240,22 @@ async function init() {
   // The Free trial is capped at 5 students (migrate databases seeded at the old 15).
   await pool.query("UPDATE plans SET max_students = 5 WHERE name = 'Free' AND max_students = 15");
 
+  // Organization-wide audit log: who changed what (tests, assignments, students,
+  // teachers) and when — for transparency across an org's teachers.
+  await pool.query(`CREATE TABLE IF NOT EXISTS audit_logs (
+    id           SERIAL PRIMARY KEY,
+    org_id       INTEGER REFERENCES organizations(id) ON DELETE CASCADE,
+    actor_id     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    actor_name   TEXT NOT NULL DEFAULT '',
+    action       TEXT NOT NULL,
+    entity_type  TEXT NOT NULL DEFAULT '',
+    entity_id    INTEGER,
+    entity_label TEXT NOT NULL DEFAULT '',
+    details      TEXT NOT NULL DEFAULT '',
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+  await pool.query('CREATE INDEX IF NOT EXISTS audit_logs_org_idx ON audit_logs (org_id, created_at DESC)');
+
   // Organization-wide question bank: reusable questions any teacher in the org
   // can pull into a test. Mirrors the questions shape + topic/difficulty tags.
   await pool.query(`CREATE TABLE IF NOT EXISTS bank_questions (

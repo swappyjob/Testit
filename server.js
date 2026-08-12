@@ -169,6 +169,17 @@ async function startSession(res, userId) {
   res.cookie('sid', token, { httpOnly: true, sameSite: 'lax', secure: PROD, maxAge: 1000 * 60 * 60 * 24 * 7 });
 }
 
+// Record an org-scoped audit entry. Best-effort: never breaks the request.
+async function logAudit(req, { action, entityType = '', entityId = null, entityLabel = '', details = '' }) {
+  try {
+    if (!req.user || req.user.org_id == null) return;
+    await run(
+      'INSERT INTO audit_logs (org_id, actor_id, actor_name, action, entity_type, entity_id, entity_label, details) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [req.user.org_id, req.user.id, req.user.name || '', action, entityType, entityId, String(entityLabel).slice(0, 200), String(details).slice(0, 500)]
+    );
+  } catch (e) { console.error('audit log failed:', e.message); }
+}
+
 const publicUser = (u) => ({
   id: u.id, role: u.role, name: u.name, email: u.email, isRoot: !!u.is_root,
   orgId: u.org_id, orgName: u.org_name || null,
@@ -324,6 +335,7 @@ app.post('/api/students', requireAuth('teacher'), requireActiveSubscription, h(a
     'INSERT INTO signup_tokens (token, name, email, phone, access_until, org_id, teacher_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
     [token, name, email, phone, accessUntil, req.user.org_id, req.user.id]
   );
+  await logAudit(req, { action: 'student.create', entityType: 'student', entityLabel: name, details: email });
   res.json({ token, signupPath: `/signup?token=${token}` });
 }));
 
@@ -395,13 +407,14 @@ app.get('/api/students/export.csv', requireAuth('teacher'), h(async (req, res) =
 app.patch('/api/students/:id', requireAuth('teacher'), requireActiveSubscription, h(async (req, res) => {
   const studentId = Number(req.params.id);
   const owned = await get(
-    "SELECT 1 FROM users WHERE id = ? AND role = 'student' AND org_id = ?",
+    "SELECT name, email FROM users WHERE id = ? AND role = 'student' AND org_id = ?",
     [studentId, req.user.org_id]
   );
   if (!owned) return res.status(404).json({ error: 'Student not found.' });
   const disabled = req.body.disabled ? 1 : 0;
   await run("UPDATE users SET disabled = ? WHERE id = ? AND role = 'student'", [disabled, studentId]);
   if (disabled) await run('DELETE FROM sessions WHERE user_id = ?', [studentId]); // log them out now
+  await logAudit(req, { action: disabled ? 'student.disable' : 'student.enable', entityType: 'student', entityId: studentId, entityLabel: owned.name, details: owned.email });
   res.json({ ok: true, disabled: !!disabled });
 }));
 
@@ -461,6 +474,7 @@ app.post('/api/teachers', requireRoot, requireActiveSubscription, h(async (req, 
     "INSERT INTO signup_tokens (token, name, email, phone, invite_role, is_root, org_id, teacher_id) VALUES (?, ?, ?, ?, 'teacher', ?, ?, ?)",
     [token, name, email, phone, makeRoot, req.user.org_id, req.user.id]
   );
+  await logAudit(req, { action: 'teacher.create', entityType: 'teacher', entityLabel: name, details: makeRoot ? `${email} (root)` : email });
   res.json({ token, signupPath: `/signup?token=${token}` });
 }));
 
@@ -922,6 +936,26 @@ app.delete('/api/bank/:id', requireAuth('teacher'), h(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// ============================================================================
+// AUDIT LOG  (organization-wide activity, teacher-visible for transparency)
+// ============================================================================
+app.get('/api/audit', requireAuth('teacher'), h(async (req, res) => {
+  const q = (req.query.q || '').trim();
+  const where = ['org_id = ?']; const args = [req.user.org_id];
+  if (q) {
+    const like = '%' + q.replace(/[\\%_]/g, '\\$&') + '%';
+    where.push("(actor_name ILIKE ? ESCAPE '\\' OR entity_label ILIKE ? ESCAPE '\\' OR details ILIKE ? ESCAPE '\\' OR action ILIKE ? ESCAPE '\\')");
+    args.push(like, like, like, like);
+  }
+  const rows = await all(`SELECT * FROM audit_logs WHERE ${where.join(' AND ')} ORDER BY created_at DESC LIMIT 300`, args);
+  res.json({
+    logs: rows.map((r) => ({
+      id: r.id, at: r.created_at, actor: r.actor_name, action: r.action,
+      entityType: r.entity_type, entityLabel: r.entity_label, details: r.details,
+    })),
+  });
+}));
+
 // Accepts a base64 data URL, saves it as an image file, returns its public URL.
 const IMAGE_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
 app.post('/api/upload', requireAuth('teacher'), requireActiveSubscription, (req, res) => {
@@ -990,6 +1024,7 @@ app.post('/api/tests', requireAuth('teacher'), requireActiveSubscription, h(asyn
     await writeQuestions(t.run, newId, questions);
     return newId;
   });
+  await logAudit(req, { action: 'test.create', entityType: 'test', entityId: testId, entityLabel: title, details: `${questions.length} question(s)` });
   res.json({ id: testId });
 }));
 
@@ -1007,6 +1042,7 @@ app.put('/api/tests/:id', requireAuth('teacher'), requireActiveSubscription, h(a
   const dueDate = readDueDate(req.body);
   const duration = readDuration(req.body);
   const { proctored, maxViolations } = readProctoring(req.body);
+  const oldQCount = (await get("SELECT COUNT(*) AS c FROM questions WHERE test_id = ? AND archived = 0", [test.id])).c;
 
   const keptAttempts = await tx(async (t) => {
     // Archive any answered current question (so old results keep their exact
@@ -1024,6 +1060,15 @@ app.put('/api/tests/:id', requireAuth('teacher'), requireActiveSubscription, h(a
     await writeQuestions(t.run, test.id, questions);
     return (await t.get("SELECT COUNT(*) AS c FROM attempts WHERE test_id = ? AND submitted_at IS NOT NULL", [test.id])).c;
   });
+  const changes = [];
+  if (title !== test.title) changes.push('title');
+  if (description !== (test.description || '')) changes.push('description');
+  if (dueDate !== (test.due_date || '')) changes.push('deadline');
+  if (duration !== test.duration_minutes) changes.push('timer');
+  if (negative_marking !== test.negative_marking || penalty !== test.penalty) changes.push('negative marking');
+  if (proctored !== test.proctored || maxViolations !== test.max_violations) changes.push('proctoring');
+  if (questions.length !== oldQCount) changes.push(`questions (${oldQCount}→${questions.length})`);
+  await logAudit(req, { action: 'test.update', entityType: 'test', entityId: test.id, entityLabel: title, details: changes.length ? 'Changed ' + changes.join(', ') : 'Re-saved questions' });
   res.json({ id: test.id, keptAttempts });
 }));
 
@@ -1052,6 +1097,7 @@ app.delete('/api/tests/:id', requireAuth('teacher'), requireActiveSubscription, 
   const test = await get('SELECT * FROM tests WHERE id = ? AND teacher_id = ?', [req.params.id, req.user.id]);
   if (!test) return res.status(404).json({ error: 'Test not found.' });
   await run('DELETE FROM tests WHERE id = ?', [test.id]);
+  await logAudit(req, { action: 'test.delete', entityType: 'test', entityId: test.id, entityLabel: test.title });
   res.json({ ok: true });
 }));
 
@@ -1113,6 +1159,7 @@ app.post('/api/assignments', requireAuth('teacher'), requireActiveSubscription, 
       }
     }
   });
+  if (added > 0) await logAudit(req, { action: 'test.assign', entityType: 'test', entityId: testId, entityLabel: test.title, details: `Assigned to ${added} student(s)` });
   res.json({ assigned: added });
 }));
 
