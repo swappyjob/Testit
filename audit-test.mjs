@@ -44,14 +44,18 @@ if (!has(L, 'test.create', (l) => l.entityLabel === `Quiz ${rand}`)) throw new E
 if (L[0].actor !== 'RootA') throw new Error('log should record the actor name');
 ok('creating a test is logged with actor + label');
 
-// Edit the test (change title + add a question).
+// Edit the test (rename + add a question in a new "Physics" section).
 await call(root, '/api/tests/' + testId, 'PUT', {
   title: `Quiz ${rand} v2`,
-  questions: [{ type: 'truefalse', prompt: 'A', correct: 'true', points: 1 }, { type: 'truefalse', prompt: 'B', correct: 'false', points: 1 }],
+  questions: [
+    { type: 'truefalse', prompt: 'A', correct: 'true', points: 1 },
+    { type: 'truefalse', prompt: 'B', correct: 'false', points: 1, section: 'Physics' },
+  ],
 });
 L = await logs(root);
-if (!has(L, 'test.update', (l) => /title/.test(l.details) && /questions/.test(l.details))) throw new Error('test.update should record a field-level diff');
-ok('editing a test logs exactly what changed (title, questions)');
+if (!has(L, 'test.update', (l) => /Renamed to "Quiz .* v2"/.test(l.details) && /Added Physics section/.test(l.details) && /Added 1 question/.test(l.details)))
+  throw new Error('test.update should spell out the rename, the new section, and the added question — got: ' + (L.find((x) => x.action === 'test.update') || {}).details);
+ok('editing a test spells out what changed (rename, "Added Physics section", "Added 1 question")');
 
 // Add a student and assign the test.
 const { token } = (await call(root, '/api/students', 'POST', { name: 'Stu', email: `stu${rand}@a.com`, phone: '9000000001' })).data;
@@ -60,8 +64,8 @@ const { user } = (await call(stu, '/api/signup/' + token, 'POST', { password: 'p
 await call(root, '/api/assignments', 'POST', { test_id: testId, student_ids: [user.id] });
 L = await logs(root);
 if (!has(L, 'student.create', (l) => l.entityLabel === 'Stu')) throw new Error('missing student.create log');
-if (!has(L, 'test.assign', (l) => /1 student/.test(l.details))) throw new Error('missing test.assign log');
-ok('adding a student and assigning a test are both logged');
+if (!has(L, 'test.assign', (l) => /Assigned to Stu/.test(l.details))) throw new Error('test.assign should name the student — got: ' + (L.find((x) => x.action === 'test.assign') || {}).details);
+ok('adding a student and assigning a test are both logged (assign names the student)');
 
 // Disable the student.
 await call(root, '/api/students/' + user.id, 'PATCH', { disabled: true });

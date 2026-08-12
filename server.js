@@ -170,6 +170,51 @@ async function startSession(res, userId) {
 }
 
 // Record an org-scoped audit entry. Best-effort: never breaks the request.
+// Turn a list of names into readable prose: "Pratik", "Pratik and Aisha",
+// "Pratik, Aisha and 3 others". Keeps the audit details human, not a raw count.
+function namesList(names, max = 3) {
+  const clean = names.map((n) => String(n || '').trim()).filter(Boolean);
+  if (clean.length === 0) return 'no one';
+  if (clean.length === 1) return clean[0];
+  if (clean.length <= max) return clean.slice(0, -1).join(', ') + ' and ' + clean[clean.length - 1];
+  const rest = clean.length - max;
+  return clean.slice(0, max).join(', ') + ` and ${rest} other${rest === 1 ? '' : 's'}`;
+}
+
+// Produce a list of human phrases describing what changed between two test states,
+// e.g. ["Renamed to \"Physics Final\"", "Added Physics section", "Added 2 questions"].
+function describeTestChanges({ old, now }) {
+  const out = [];
+  if (now.title !== old.title) out.push(`Renamed to "${now.title}"`);
+  if (now.description !== old.description) out.push(now.description ? 'Updated description' : 'Cleared description');
+  if (now.dueDate !== old.dueDate) out.push(now.dueDate ? `Changed deadline to ${now.dueDate}` : 'Removed deadline');
+  if (now.duration !== old.duration) out.push(now.duration ? `Set timer to ${now.duration} min` : 'Removed timer');
+  if (now.negative_marking !== old.negative_marking || now.penalty !== old.penalty)
+    out.push(now.negative_marking ? `Enabled negative marking (${now.penalty})` : 'Disabled negative marking');
+  if (now.proctored !== old.proctored)
+    out.push(now.proctored ? `Enabled proctoring (max ${now.maxViolations} violations)` : 'Disabled proctoring');
+  else if (now.proctored && now.maxViolations !== old.maxViolations)
+    out.push(`Changed proctoring limit to ${now.maxViolations} violations`);
+
+  // Section changes: which section names appeared or disappeared.
+  const sectionsOf = (qs) => new Set(qs.map((q) => String(q.section || '').trim()).filter(Boolean));
+  const oldSecs = sectionsOf(old.questions), nowSecs = sectionsOf(now.questions);
+  for (const s of nowSecs) if (!oldSecs.has(s)) out.push(`Added ${s} section`);
+  for (const s of oldSecs) if (!nowSecs.has(s)) out.push(`Removed ${s} section`);
+
+  // Question count change (or, if the count is unchanged, whether their text changed).
+  const delta = now.questions.length - old.questions.length;
+  if (delta > 0) out.push(`Added ${delta} question${delta === 1 ? '' : 's'}`);
+  else if (delta < 0) out.push(`Removed ${-delta} question${-delta === 1 ? '' : 's'}`);
+  else {
+    const promptsOf = (qs) => qs.map((q) => String(q.prompt || '').trim());
+    const oldP = promptsOf(old.questions).join(' '), nowP = promptsOf(now.questions).join(' ');
+    if (oldP !== nowP) out.push('Edited questions');
+  }
+
+  return out;
+}
+
 async function logAudit(req, { action, entityType = '', entityId = null, entityLabel = '', details = '' }) {
   try {
     if (!req.user || req.user.org_id == null) return;
@@ -1042,7 +1087,8 @@ app.put('/api/tests/:id', requireAuth('teacher'), requireActiveSubscription, h(a
   const dueDate = readDueDate(req.body);
   const duration = readDuration(req.body);
   const { proctored, maxViolations } = readProctoring(req.body);
-  const oldQCount = (await get("SELECT COUNT(*) AS c FROM questions WHERE test_id = ? AND archived = 0", [test.id])).c;
+  const oldQuestions = await all("SELECT prompt, section FROM questions WHERE test_id = ? AND archived = 0 ORDER BY position, id", [test.id]);
+  const oldQCount = oldQuestions.length;
 
   const keptAttempts = await tx(async (t) => {
     // Archive any answered current question (so old results keep their exact
@@ -1060,15 +1106,11 @@ app.put('/api/tests/:id', requireAuth('teacher'), requireActiveSubscription, h(a
     await writeQuestions(t.run, test.id, questions);
     return (await t.get("SELECT COUNT(*) AS c FROM attempts WHERE test_id = ? AND submitted_at IS NOT NULL", [test.id])).c;
   });
-  const changes = [];
-  if (title !== test.title) changes.push('title');
-  if (description !== (test.description || '')) changes.push('description');
-  if (dueDate !== (test.due_date || '')) changes.push('deadline');
-  if (duration !== test.duration_minutes) changes.push('timer');
-  if (negative_marking !== test.negative_marking || penalty !== test.penalty) changes.push('negative marking');
-  if (proctored !== test.proctored || maxViolations !== test.max_violations) changes.push('proctoring');
-  if (questions.length !== oldQCount) changes.push(`questions (${oldQCount}→${questions.length})`);
-  await logAudit(req, { action: 'test.update', entityType: 'test', entityId: test.id, entityLabel: title, details: changes.length ? 'Changed ' + changes.join(', ') : 'Re-saved questions' });
+  const changes = describeTestChanges({
+    old: { title: test.title, description: test.description || '', dueDate: test.due_date || '', duration: test.duration_minutes, negative_marking: test.negative_marking, penalty: test.penalty, proctored: test.proctored, maxViolations: test.max_violations, questions: oldQuestions },
+    now: { title, description, dueDate, duration, negative_marking, penalty, proctored, maxViolations, questions },
+  });
+  await logAudit(req, { action: 'test.update', entityType: 'test', entityId: test.id, entityLabel: title, details: changes.length ? changes.join('; ') : 'Re-saved with no changes' });
   res.json({ id: test.id, keptAttempts });
 }));
 
@@ -1147,19 +1189,20 @@ app.post('/api/assignments', requireAuth('teacher'), requireActiveSubscription, 
   if (studentIds.length === 0) return res.status(400).json({ error: 'Select at least one student.' });
 
   let added = 0;
+  const addedNames = [];
   await tx(async (t) => {
     for (const sid of studentIds) {
-      const student = await t.get("SELECT id FROM users WHERE id = ? AND role = 'student' AND org_id = ?", [sid, req.user.org_id]);
+      const student = await t.get("SELECT id, name FROM users WHERE id = ? AND role = 'student' AND org_id = ?", [sid, req.user.org_id]);
       if (student) {
         const r = await t.run(
           'INSERT INTO assignments (test_id, student_id, teacher_id) VALUES (?, ?, ?) ON CONFLICT (test_id, student_id) DO NOTHING',
           [testId, sid, req.user.id]
         );
-        added += r.changes;
+        if (r.changes > 0) { added += r.changes; addedNames.push(student.name); }
       }
     }
   });
-  if (added > 0) await logAudit(req, { action: 'test.assign', entityType: 'test', entityId: testId, entityLabel: test.title, details: `Assigned to ${added} student(s)` });
+  if (added > 0) await logAudit(req, { action: 'test.assign', entityType: 'test', entityId: testId, entityLabel: test.title, details: 'Assigned to ' + namesList(addedNames) });
   res.json({ assigned: added });
 }));
 
