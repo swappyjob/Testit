@@ -175,15 +175,6 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
   }
   function addSection() { const name = newSection.trim(); if (name && !sections.includes(name)) setSections((s) => [...s, name]); setNewSection(''); }
   function removeSection(name) { setSections((s) => s.filter((x) => x !== name)); setQuestions((qs) => qs.map((q) => (q.section === name ? { ...q, section: '' } : q))); }
-  async function uploadImage(qi, file) {
-    if (!file) return;
-    if (file.size > 5 * 1024 * 1024) { alert('Image must be 5 MB or smaller.'); return; }
-    try {
-      const dataUrl = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(new Error('Could not read the file.')); r.readAsDataURL(file); });
-      const { url } = await api('/api/upload', 'POST', { dataUrl });
-      updateQ(qi, { image: url });
-    } catch (e) { alert(e.message); }
-  }
   // Save a PNG drawn on the pad: upload it and attach as the question image.
   async function saveDrawing(dataUrl) {
     setShowDraw(false);
@@ -341,21 +332,17 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
             <span className="muted" style={{ fontSize: 12 }}>— or type <code>$…$</code> yourself</span>
           </div>
 
-          <label>Image or diagram (optional)</label>
+          <label>Diagram (optional)</label>
           {q.image ? (
             <div style={{ marginTop: 8 }}>
               <img src={q.image} alt="" style={{ maxWidth: 240, maxHeight: 180, border: '1px solid var(--line)', borderRadius: 8, display: 'block' }} />
               <div className="row" style={{ gap: 8, marginTop: 6 }}>
-                <button className="btn ghost small" onClick={() => setShowDraw(true)}>✏️ Edit / draw</button>
-                <button className="btn danger small" onClick={() => updateQ(qIndex, { image: '' })}>Remove image</button>
+                <button className="btn ghost small" onClick={() => setShowDraw(true)}>✏️ Edit drawing</button>
+                <button className="btn danger small" onClick={() => updateQ(qIndex, { image: '' })}>Remove</button>
               </div>
             </div>
           ) : (
-            <div className="row" style={{ gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-              <input type="file" accept="image/png,image/jpeg,image/gif,image/webp" onChange={(e) => uploadImage(qIndex, e.target.files[0])} style={{ width: 'auto' }} />
-              <span className="muted">or</span>
-              <button className="btn secondary small" type="button" onClick={() => setShowDraw(true)}>✏️ Draw a diagram</button>
-            </div>
+            <button className="btn secondary small" type="button" onClick={() => setShowDraw(true)}>✏️ Draw a diagram</button>
           )}
 
           {sections.length > 0 && (
