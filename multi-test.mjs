@@ -44,6 +44,9 @@ async function takeWith(teacher, testId, name, email, answers) {
 
 const teacher = makeJar();
 await call(teacher, '/api/register-teacher', 'POST', { name: 'T', email: `t${rand}@x.com`, password: 'secret123' });
+// This suite enrolls 6 students; the org defaults to Free (5 cap), so move it to Basic.
+const basic = (await call(teacher, '/api/my-org/plan')).plans.find((p) => p.name === 'Basic');
+await call(teacher, '/api/my-org/plan', 'POST', { planId: basic.id });
 
 // A test with one multi question: correct answers are A, B, C (indices 0,1,2) of A,B,C,D.
 const { id: testId } = await call(teacher, '/api/tests', 'POST', {

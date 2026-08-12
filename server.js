@@ -249,7 +249,10 @@ app.post('/api/register-teacher', h(async (req, res) => {
   // Bootstrap/dev entry point (not exposed in the UI): create a fresh
   // organization and make this teacher its root teacher.
   const { newId, orgId } = await tx(async (t) => {
-    const oid = (await t.run('INSERT INTO organizations (name) VALUES (?) RETURNING id', [`${name}'s Organization`])).rows[0].id;
+    const oid = (await t.run(
+      "INSERT INTO organizations (name, plan_id) VALUES (?, (SELECT id FROM plans WHERE name = 'Free')) RETURNING id",
+      [`${name}'s Organization`]
+    )).rows[0].id;
     const uid = (await t.run(
       'INSERT INTO users (role, name, email, password_hash, is_root, org_id) VALUES (?, ?, ?, ?, 1, ?) RETURNING id',
       ['teacher', name, email, hashPassword(password), oid]
@@ -612,7 +615,7 @@ app.post('/api/orgs', requireAdmin, h(async (req, res) => {
   const name = (req.body.name || '').trim();
   if (!name) return res.status(400).json({ error: 'Organization name is required.' });
   const id = (await run(
-    "INSERT INTO organizations (name, plan_id) VALUES (?, (SELECT id FROM plans WHERE name = 'Basic')) RETURNING id",
+    "INSERT INTO organizations (name, plan_id) VALUES (?, (SELECT id FROM plans WHERE name = 'Free')) RETURNING id",
     [name]
   )).rows[0].id;
   res.json({ id, name });

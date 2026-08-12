@@ -133,11 +133,11 @@ const plans = (await call(admin, '/api/plans')).data.plans;
 if (plans.length < 5 || !plans.find((p) => p.name === 'Basic')) throw new Error('plans not seeded');
 ok('pricing plans are available to the admin');
 
-// New orgs default to Basic (100 students).
+// New orgs default to the Free plan (5 students).
 const orgC = (await call(admin, '/api/orgs', 'POST', { name: `Org C ${rand}` })).data;
 const orgCrow = (await call(admin, '/api/orgs')).data.orgs.find((o) => o.id === orgC.id);
-if (orgCrow.planName !== 'Basic' || orgCrow.maxStudents !== 100) throw new Error('new org should default to Basic');
-ok('new organization defaults to the Basic plan');
+if (orgCrow.planName !== 'Free' || orgCrow.maxStudents !== 5) throw new Error('new org should default to Free');
+ok('new organization defaults to the Free plan');
 
 // Assign the Free plan (cap 5) to Org A and enforce the cap.
 const freePlan = plans.find((p) => p.name === 'Free');

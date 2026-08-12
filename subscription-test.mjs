@@ -35,6 +35,12 @@ const orgId = me.orgId;
 if (me.subscriptionExpired) throw new Error('a new org should not be expired');
 ok('new organization starts with an active (non-expired) subscription');
 
+// A newly registered organization defaults to the Free plan (5-student cap).
+const orgPlan = (await call(root, '/api/my-org/plan')).data;
+if (!orgPlan.plan || orgPlan.plan.name !== 'Free') throw new Error('a new org should default to the Free plan, got: ' + JSON.stringify(orgPlan.plan));
+if (orgPlan.plan.max_students !== 5) throw new Error('the Free plan should cap at 5 students, got: ' + orgPlan.plan.max_students);
+ok('new organization defaults to the Free plan (5-student cap)');
+
 // While active, writes succeed.
 const created = await call(root, '/api/tests', 'POST', { title: 'Active', questions: Q });
 if (created.status !== 200) throw new Error('active org should be able to create a test');
