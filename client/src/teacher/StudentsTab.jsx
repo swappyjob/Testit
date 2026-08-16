@@ -47,7 +47,7 @@ export default function StudentsTab({ readOnly }) {
           <div><label>Phone number</label><input type="tel" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="e.g. +91 98765 43210" /></div>
           <div><label>Access until (optional)</label><input type="date" value={form.accessUntil} onChange={(e) => setForm({ ...form, accessUntil: e.target.value })} /></div>
         </div>
-        <p className="muted" style={{ fontSize: 13, margin: 0 }}>After this date the student is automatically disabled and can no longer log in. Leave blank for no end date.</p>
+        <p className="muted" style={{ fontSize: 13, margin: 0 }}>After this date the student loses access to your organization's tests (their access to any other institutes is unaffected). Leave blank for no end date.</p>
         <div style={{ marginTop: 16 }}><button className="btn" onClick={addStudent}>Create student &amp; get link</button></div>
       </div>
       )}
@@ -106,7 +106,7 @@ function StudentDetail({ student: s, onBack, onChanged, readOnly }) {
   const [msg, setMsg] = useState(null); // { text, ok }
 
   async function toggle() {
-    if (!s.disabled && !window.confirm(`Disable ${s.name}? They will be logged out immediately and cannot log in until re-enabled.`)) return;
+    if (!s.disabled && !window.confirm(`Disable ${s.name} in your organization? They'll lose access to your tests (any other institutes they belong to are unaffected). You can re-enable them anytime.`)) return;
     setBusy(true);
     try { await api('/api/students/' + s.studentId, 'PATCH', { disabled: !s.disabled }); await onChanged(); }
     catch (e) { setMsg({ text: e.message, ok: false }); } finally { setBusy(false); }
@@ -138,7 +138,7 @@ function StudentDetail({ student: s, onBack, onChanged, readOnly }) {
           ) : (
             <>
               <button className="btn secondary" onClick={() => setEditing(true)} disabled={busy || readOnly}>Edit</button>
-              <button className={s.disabled ? 'btn secondary' : 'btn danger'} onClick={toggle} disabled={busy || readOnly}>{s.disabled ? 'Enable account' : 'Disable account'}</button>
+              <button className={s.disabled ? 'btn secondary' : 'btn danger'} onClick={toggle} disabled={busy || readOnly}>{s.disabled ? 'Enable in this org' : 'Disable in this org'}</button>
               <button className="btn secondary" onClick={(e) => copyResetLink(e.target)} disabled={busy || readOnly}>Copy password-reset link</button>
             </>
           )}

@@ -49,14 +49,19 @@ if ((await call(makeJar(), '/api/login', 'POST', { email: futEmail, password: 'p
   throw new Error('future-dated student should log in');
 ok('student with a future end date can log in and use the app');
 
-// Student with a PAST end date is auto-disabled.
+// Student with a PAST end date: access is per-organization now, so they stay
+// logged in but that org's tests are hidden.
 const expEmail = `exp${rand}@x.com`;
 const exp = await makeStudent('Expired', expEmail, PAST);
-if ((await call(exp.jar, '/api/me')).data.user !== null)
-  throw new Error('past-dated student session should be treated as logged out');
-const loginExp = await call(makeJar(), '/api/login', 'POST', { email: expEmail, password: 'pass123' }, false);
-if (loginExp.status !== 403) throw new Error('past-dated student login should be 403, got ' + loginExp.status);
-ok('student past their end date is auto-disabled (session dead + login 403)');
+if ((await call(exp.jar, '/api/me')).data.user === null)
+  throw new Error('expired student should still be logged in (per-org access)');
+if ((await call(makeJar(), '/api/login', 'POST', { email: expEmail, password: 'pass123' }, false)).status !== 200)
+  throw new Error('expired student should still be able to log in');
+const { id: expTestId } = (await call(teacher, '/api/tests', 'POST', { title: 'ExpT', questions: [{ type: 'truefalse', prompt: 'A', correct: 'true', points: 1 }] })).data;
+await call(teacher, '/api/assignments', 'POST', { test_id: expTestId, student_ids: [exp.user.id] });
+if ((await call(exp.jar, '/api/my-assignments')).data.assignments.length !== 0)
+  throw new Error("an expired student should not see the org's tests");
+ok('student past their end date stays logged in, but the org’s tests are hidden');
 
 // Student with no end date works.
 const noEmail = `no${rand}@x.com`;

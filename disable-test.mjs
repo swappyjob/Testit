@@ -33,37 +33,43 @@ await call(student, '/api/signup/' + token, 'POST', { password: 'pass123' });
 const studentId = (await call(teacher, '/api/students')).data.students.find((s) => s.email === email).studentId;
 ok('student created and signed up (id ' + studentId + ')');
 
-// Logged-in student can access their dashboard
-let r = await call(student, '/api/my-assignments');
-if (r.status !== 200) throw new Error('active student should reach dashboard');
-ok('active student can use the app');
+// Give the student a test to see.
+const { id: testId } = (await call(teacher, '/api/tests', 'POST', { title: 'T1', questions: [{ type: 'truefalse', prompt: 'A', correct: 'true', points: 1 }] })).data;
+await call(teacher, '/api/assignments', 'POST', { test_id: testId, student_ids: [studentId] });
 
-// Disable the student
+// Active: the student sees and can open the assigned test.
+let r = await call(student, '/api/my-assignments');
+if (r.status !== 200 || r.data.assignments.length !== 1) throw new Error('active student should see the assigned test');
+const aid = r.data.assignments[0].assignmentId;
+if ((await call(student, '/api/take/' + aid)).status !== 200) throw new Error('active student should open the test');
+ok('active student sees and can open the assigned test');
+
+// Disable the student within this organization.
 await call(teacher, '/api/students/' + studentId, 'PATCH', { disabled: true });
 ok('teacher disabled the student');
 
-// The student's existing session is now revoked
-r = await call(student, '/api/my-assignments', 'GET', undefined, false);
-if (r.status !== 401) throw new Error('disabled student session should be revoked, got ' + r.status);
-ok('existing session revoked immediately');
+// Per-org disable: the student stays logged in, but the org's tests vanish and can't be opened.
+r = await call(student, '/api/my-assignments');
+if (r.status !== 200) throw new Error('disabled student stays logged in (per-org disable), got ' + r.status);
+if (r.data.assignments.length !== 0) throw new Error("a disabled org's tests should be hidden");
+if ((await call(student, '/api/take/' + aid, 'GET', undefined, false)).status !== 403) throw new Error('disabled student should not open the test (403)');
+ok('disabled: student stays logged in but the org’s tests are hidden and blocked (403)');
 
-// The student can no longer log in
+// The account itself is still usable — the student can still log in.
 const fresh = makeJar();
-r = await call(fresh, '/api/login', 'POST', { email, password: 'pass123' }, false);
-if (r.status !== 403) throw new Error('disabled login should be 403, got ' + r.status);
-ok('disabled student cannot log in (403)');
+if ((await call(fresh, '/api/login', 'POST', { email, password: 'pass123' }, false)).status !== 200) throw new Error('disabled student can still log in (per-org model)');
+ok('disabled student can still log in (the account stays active)');
 
-// Teacher list shows disabled
+// Teacher list shows disabled.
 let listed = (await call(teacher, '/api/students')).data.students.find((s) => s.email === email);
 if (!listed.disabled) throw new Error('list should show disabled=true');
 ok('student shows as disabled in the list');
 
-// Re-enable
+// Re-enable → the test comes back.
 await call(teacher, '/api/students/' + studentId, 'PATCH', { disabled: false });
-const fresh2 = makeJar();
-r = await call(fresh2, '/api/login', 'POST', { email, password: 'pass123' }, false);
-if (r.status !== 200) throw new Error('re-enabled login should succeed, got ' + r.status);
-ok('re-enabled student can log in again');
+r = await call(student, '/api/my-assignments');
+if (r.data.assignments.length !== 1) throw new Error('re-enabled student should see the test again');
+ok('re-enabling restores access to the org’s tests');
 
 // A teacher cannot disable a student they do not own
 const other = await registerTeacher(BASE, makeJar, call, { name: 'O', email: `o${rand}@x.com`, password: 'secret123' });

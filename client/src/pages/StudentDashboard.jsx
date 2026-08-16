@@ -24,7 +24,7 @@ export default function StudentDashboard() {
           assignments.map((a) => (
             <div className="list-item" key={a.assignmentId}>
               <div>
-                <h3>{a.title}</h3>
+                <h3>{a.title} {a.orgName && <span className="pill brand" style={{ fontSize: 12, fontWeight: 600 }}>{a.orgName}</span>}</h3>
                 <div className="muted" style={{ fontSize: 13 }}>
                   {a.description} {a.questionCount} question(s){a.dueDate ? ' · Due ' + fmtDateTime(a.dueDate) : ''}
                 </div>

@@ -55,13 +55,14 @@ if ((await call(makeJar(), '/api/login', 'POST', { email, password: 'pass123' },
   throw new Error('student should still log in (future date)');
 ok('account reflects the edit and student can still log in');
 
-// Editing access into the past auto-disables the student.
+// Editing access into the past ends the student's access to THIS org (access is
+// per-organization): they can still log in, but the list flags them expired.
 await call(teacher, '/api/students/' + s0.id, 'PUT', { name: 'New Name', phone: '9111111111', accessUntil: ymd(-1) });
-if ((await call(makeJar(), '/api/login', 'POST', { email, password: 'pass123' }, false)).status !== 403)
-  throw new Error('past date should block login');
+if ((await call(makeJar(), '/api/login', 'POST', { email, password: 'pass123' }, false)).status !== 200)
+  throw new Error('expired student should still be able to log in (per-org access)');
 const s2 = (await call(teacher, '/api/students')).data.students.find((s) => s.id === s0.id);
 if (!s2.expired) throw new Error('list should show expired');
-ok('editing access into the past disables the student');
+ok('editing access into the past ends the org’s access (login still works; list shows expired)');
 
 // Validation: blank name / bad phone rejected.
 if ((await call(teacher, '/api/students/' + s0.id, 'PUT', { name: '', phone: '9111111111' }, false)).status !== 400)

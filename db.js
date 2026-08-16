@@ -212,6 +212,13 @@ async function init() {
   await pool.query("ALTER TABLE signup_tokens ADD COLUMN IF NOT EXISTS access_until TEXT NOT NULL DEFAULT ''");
   await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS org_id INTEGER REFERENCES organizations(id) ON DELETE SET NULL');
   await pool.query('ALTER TABLE signup_tokens ADD COLUMN IF NOT EXISTS org_id INTEGER REFERENCES organizations(id) ON DELETE SET NULL');
+  // A student can belong to multiple organizations: each signup_tokens row is one
+  // org membership. `disabled` is now per-membership (an org can disable a student
+  // without affecting their other orgs). Backfill from the old global users.disabled.
+  await pool.query('ALTER TABLE signup_tokens ADD COLUMN IF NOT EXISTS disabled INTEGER NOT NULL DEFAULT 0');
+  await pool.query(`UPDATE signup_tokens t SET disabled = 1
+                      FROM users u
+                     WHERE u.id = t.student_id AND u.disabled = 1 AND t.invite_role = 'student' AND t.disabled = 0`);
   // Allow the new 'admin' role on databases created before it existed.
   await pool.query('ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check');
   await pool.query("ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('admin', 'teacher', 'student'))");

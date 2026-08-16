@@ -121,8 +121,10 @@ app.use(h(async (req, res, next) => {
         WHERE s.token = ? AND u.disabled = 0`,
       [sid]
     );
-    // Students past their access end date are treated as logged out.
-    if (row && !(row.role === 'student' && isExpired(row.access_until))) req.user = row;
+    // A student may belong to several organizations; per-org access (expiry /
+    // disable) is enforced per membership at the assignment/take level, so the
+    // account stays logged in even if one org's membership has lapsed.
+    if (row) req.user = row;
   }
   next();
 }));
@@ -272,8 +274,8 @@ app.post('/api/login', h(async (req, res) => {
     return res.status(401).json({ error: 'Incorrect email or password.' });
   if (user.disabled)
     return res.status(403).json({ error: 'Your account has been disabled. Please contact your teacher.' });
-  if (user.role === 'student' && isExpired(user.access_until))
-    return res.status(403).json({ error: 'Your access period has ended. Please contact your teacher.' });
+  // A student's access is now per-organization; it's enforced per membership when
+  // they view/take a test, not at login — so a lapse in one org doesn't lock them out.
   await startSession(res, user.id);
   res.json({ user: publicUser(user) });
 }));
@@ -363,10 +365,13 @@ app.post('/api/students', requireAuth('teacher'), requireActiveSubscription, h(a
   if (!phone) return res.status(400).json({ error: 'Student phone number is required.' });
   if (!/^[\d+()\-\s]{6,20}$/.test(phone))
     return res.status(400).json({ error: 'Please enter a valid phone number.' });
-  if (await get('SELECT id FROM users WHERE email = ?', [email]))
-    return res.status(409).json({ error: 'A user with that email already exists.' });
-  if (await get('SELECT id FROM signup_tokens WHERE email = ? AND used = 0', [email]))
-    return res.status(409).json({ error: 'A pending invite for that email already exists.' });
+  // A student may belong to multiple organizations, so an existing student email
+  // is fine — we only block a duplicate WITHIN THIS organization. A teacher/admin
+  // account with that email is still a clash.
+  if (await get("SELECT id FROM users WHERE email = ? AND role IN ('teacher','admin')", [email]))
+    return res.status(409).json({ error: 'That email belongs to a teacher or admin account.' });
+  if (await get("SELECT id FROM signup_tokens WHERE email = ? AND org_id = ? AND invite_role = 'student'", [email, req.user.org_id]))
+    return res.status(409).json({ error: 'That student is already in your organization (or has a pending invite).' });
 
   // Enforce the organization's plan student limit (NULL cap = unlimited).
   const plan = await get(
@@ -393,9 +398,8 @@ app.get('/api/students', requireAuth('teacher'), h(async (req, res) => {
   const q = (req.query.q || '').trim();
   // Students belong to the organization, so every teacher in the org sees them all.
   const base =
-    `SELECT t.id AS token_id, t.name, t.email, t.phone, t.access_until, t.token, t.used, t.student_id, u.disabled
+    `SELECT t.id AS token_id, t.name, t.email, t.phone, t.access_until, t.token, t.used, t.student_id, t.disabled
        FROM signup_tokens t
-       LEFT JOIN users u ON u.id = t.student_id
       WHERE t.org_id = ? AND t.invite_role = 'student'`;
   let invites;
   if (q) {
@@ -426,10 +430,9 @@ app.get('/api/students', requireAuth('teacher'), h(async (req, res) => {
 // Download all of this teacher's students as a CSV file.
 app.get('/api/students/export.csv', requireAuth('teacher'), h(async (req, res) => {
   const rows = await all(
-    `SELECT t.name, t.email, t.phone, t.access_until, t.used, u.disabled,
+    `SELECT t.name, t.email, t.phone, t.access_until, t.used, t.disabled,
             to_char(t.created_at, 'YYYY-MM-DD HH24:MI') AS created_at
        FROM signup_tokens t
-       LEFT JOIN users u ON u.id = t.student_id
       WHERE t.org_id = ? AND t.invite_role = 'student' ORDER BY t.created_at DESC`,
     [req.user.org_id]
   );
@@ -451,19 +454,21 @@ app.get('/api/students/export.csv', requireAuth('teacher'), h(async (req, res) =
   res.send(csv);
 }));
 
-// Enable/disable a student. A disabled student cannot log in, and any active
-// session is revoked immediately.
+// Enable/disable a student WITHIN THIS organization only (per-membership). The
+// student stays logged in and keeps access to their other orgs; a disabled
+// membership just hides this org's tests. :id is the student's user id.
 app.patch('/api/students/:id', requireAuth('teacher'), requireActiveSubscription, h(async (req, res) => {
   const studentId = Number(req.params.id);
-  const owned = await get(
-    "SELECT name, email FROM users WHERE id = ? AND role = 'student' AND org_id = ?",
+  const m = await get(
+    `SELECT st.id AS token_id, u.name, u.email
+       FROM signup_tokens st JOIN users u ON u.id = st.student_id
+      WHERE st.student_id = ? AND st.org_id = ? AND st.invite_role = 'student'`,
     [studentId, req.user.org_id]
   );
-  if (!owned) return res.status(404).json({ error: 'Student not found.' });
+  if (!m) return res.status(404).json({ error: 'Student not found.' });
   const disabled = req.body.disabled ? 1 : 0;
-  await run("UPDATE users SET disabled = ? WHERE id = ? AND role = 'student'", [disabled, studentId]);
-  if (disabled) await run('DELETE FROM sessions WHERE user_id = ?', [studentId]); // log them out now
-  await logAudit(req, { action: disabled ? 'student.disable' : 'student.enable', entityType: 'student', entityId: studentId, entityLabel: owned.name, details: owned.email });
+  await run('UPDATE signup_tokens SET disabled = ? WHERE id = ?', [disabled, m.token_id]);
+  await logAudit(req, { action: disabled ? 'student.disable' : 'student.enable', entityType: 'student', entityId: studentId, entityLabel: m.name, details: m.email });
   res.json({ ok: true, disabled: !!disabled });
 }));
 
@@ -483,11 +488,12 @@ app.put('/api/students/:id', requireAuth('teacher'), requireActiveSubscription, 
   if (!/^[\d+()\-\s]{6,20}$/.test(phone))
     return res.status(400).json({ error: 'Please enter a valid phone number.' });
 
+  // access_until is per-organization (on the membership); name/phone are the
+  // shared profile, kept in sync so assignment lists show the right name.
   await run('UPDATE signup_tokens SET name = ?, phone = ?, access_until = ? WHERE id = ?',
     [name, phone, accessUntil, tok.id]);
   if (tok.student_id) {
-    await run('UPDATE users SET name = ?, phone = ?, access_until = ? WHERE id = ?',
-      [name, phone, accessUntil, tok.student_id]);
+    await run('UPDATE users SET name = ?, phone = ? WHERE id = ?', [name, phone, tok.student_id]);
   }
   res.json({ ok: true });
 }));
@@ -495,7 +501,10 @@ app.put('/api/students/:id', requireAuth('teacher'), requireActiveSubscription, 
 // Teacher generates a password-reset link for one of their students.
 app.post('/api/students/:id/reset-link', requireAuth('teacher'), requireActiveSubscription, h(async (req, res) => {
   const studentId = Number(req.params.id);
-  const owned = await get("SELECT 1 FROM users WHERE id = ? AND role = 'student' AND org_id = ?", [studentId, req.user.org_id]);
+  const owned = await get(
+    "SELECT 1 FROM signup_tokens WHERE student_id = ? AND org_id = ? AND invite_role = 'student' AND used = 1",
+    [studentId, req.user.org_id]
+  );
   if (!owned) return res.status(404).json({ error: 'Student not found.' });
   const token = await createResetToken(studentId);
   res.json({ resetPath: `/reset?token=${token}` });
@@ -809,7 +818,25 @@ app.get('/api/signup/:token', h(async (req, res) => {
   const t = await get('SELECT * FROM signup_tokens WHERE token = ?', [req.params.token]);
   if (!t) return res.status(404).json({ error: 'This signup link is invalid.' });
   if (t.used) return res.status(410).json({ error: 'This signup link has already been used.' });
-  res.json({ name: t.name, email: t.email, role: t.invite_role, isRoot: !!t.is_root });
+  // If someone already has an account with this email, they join by accepting
+  // (logging in) rather than setting a new password.
+  const existingAccount = !!(await get("SELECT id FROM users WHERE email = ?", [t.email]));
+  const org = t.org_id ? await get('SELECT name FROM organizations WHERE id = ?', [t.org_id]) : null;
+  res.json({ name: t.name, email: t.email, role: t.invite_role, isRoot: !!t.is_root, existingAccount, orgName: org ? org.name : null });
+}));
+
+// A logged-in student accepts an invite to join an additional organization.
+app.post('/api/accept-invite/:token', requireAuth('student'), h(async (req, res) => {
+  const t = await get('SELECT * FROM signup_tokens WHERE token = ?', [req.params.token]);
+  if (!t) return res.status(404).json({ error: 'This invite link is invalid.' });
+  if (t.used) return res.status(410).json({ error: 'This invite link has already been used.' });
+  if (t.invite_role !== 'student') return res.status(400).json({ error: 'This invite is not for a student.' });
+  if (t.email.toLowerCase() !== String(req.user.email).toLowerCase())
+    return res.status(403).json({ error: 'This invite was sent to a different email address. Log in with that email to accept it.' });
+  if (await get("SELECT id FROM signup_tokens WHERE email = ? AND org_id = ? AND invite_role = 'student' AND used = 1", [t.email, t.org_id]))
+    return res.status(409).json({ error: "You're already a member of that organization." });
+  await run('UPDATE signup_tokens SET used = 1, student_id = ? WHERE id = ?', [req.user.id, t.id]);
+  res.json({ ok: true });
 }));
 
 // Complete signup: set a password (creates a student or teacher per the invite).
@@ -1196,7 +1223,13 @@ app.post('/api/assignments', requireAuth('teacher'), requireActiveSubscription, 
   const addedNames = [];
   await tx(async (t) => {
     for (const sid of studentIds) {
-      const student = await t.get("SELECT id, name FROM users WHERE id = ? AND role = 'student' AND org_id = ?", [sid, req.user.org_id]);
+      // The student must be enrolled (and not disabled) in the teacher's org.
+      const student = await t.get(
+        `SELECT u.id, u.name FROM users u
+           JOIN signup_tokens st ON st.student_id = u.id
+          WHERE u.id = ? AND u.role = 'student' AND st.org_id = ? AND st.used = 1 AND st.disabled = 0`,
+        [sid, req.user.org_id]
+      );
       if (student) {
         const r = await t.run(
           'INSERT INTO assignments (test_id, student_id, teacher_id) VALUES (?, ?, ?) ON CONFLICT (test_id, student_id) DO NOTHING',
@@ -1225,33 +1258,62 @@ app.get('/api/tests/:id/assignments', requireAuth('teacher'), h(async (req, res)
 // ============================================================================
 // STUDENT: my assigned tests + taking them
 // ============================================================================
+
+// The student's membership in the organization that owns `testId` (the test's
+// teacher's org). Returns null if they aren't enrolled there.
+async function membershipForTest(studentId, testId) {
+  return get(
+    `SELECT st.* FROM tests t
+       JOIN users tu ON tu.id = t.teacher_id
+       JOIN signup_tokens st ON st.student_id = ? AND st.org_id = tu.org_id
+            AND st.invite_role = 'student' AND st.used = 1
+      WHERE t.id = ?`,
+    [studentId, testId]
+  );
+}
+// True when the student may currently see/take/review this test's org content.
+function membershipActive(m) {
+  return !!m && !m.disabled && !isExpired(m.access_until);
+}
+
 app.get('/api/my-assignments', requireAuth('student'), h(async (req, res) => {
+  // Only surface tests from organizations where the student's membership is
+  // active (enrolled, not disabled). Each test is labelled with its org so a
+  // student enrolled in several institutes can tell them apart.
   const rows = await all(
     `SELECT a.id AS assignment_id, t.id AS test_id, t.title, t.description, t.due_date,
+            o.name AS org_name, st.access_until AS membership_access,
             (SELECT COUNT(*) FROM questions q WHERE q.test_id = t.id AND q.archived = 0) AS question_count,
             at.id AS attempt_id, at.submitted_at, at.auto_score, at.manual_score,
             at.max_score, at.needs_grading
        FROM assignments a
        JOIN tests t ON t.id = a.test_id
+       JOIN users tu ON tu.id = t.teacher_id
+       JOIN signup_tokens st ON st.student_id = a.student_id AND st.org_id = tu.org_id
+            AND st.invite_role = 'student' AND st.used = 1 AND st.disabled = 0
+       LEFT JOIN organizations o ON o.id = tu.org_id
        LEFT JOIN attempts at ON at.assignment_id = a.id
       WHERE a.student_id = ?
       ORDER BY a.created_at DESC`,
     [req.user.id]
   );
-  const assignments = rows.map((r) => ({
-    assignmentId: r.assignment_id,
-    testId: r.test_id,
-    title: r.title,
-    description: r.description,
-    questionCount: r.question_count,
-    submitted: !!r.submitted_at,
-    started: !!r.attempt_id && !r.submitted_at,
-    needsGrading: !!r.needs_grading,
-    score: r.submitted_at ? r.auto_score + r.manual_score : null,
-    maxScore: r.max_score,
-    dueDate: r.due_date,
-    closed: isClosed(r.due_date),
-  }));
+  const assignments = rows
+    .filter((r) => !isExpired(r.membership_access)) // per-org access window
+    .map((r) => ({
+      assignmentId: r.assignment_id,
+      testId: r.test_id,
+      title: r.title,
+      description: r.description,
+      orgName: r.org_name || null,
+      questionCount: r.question_count,
+      submitted: !!r.submitted_at,
+      started: !!r.attempt_id && !r.submitted_at,
+      needsGrading: !!r.needs_grading,
+      score: r.submitted_at ? r.auto_score + r.manual_score : null,
+      maxScore: r.max_score,
+      dueDate: r.due_date,
+      closed: isClosed(r.due_date),
+    }));
   res.json({ assignments });
 }));
 
@@ -1289,6 +1351,8 @@ app.get('/api/my-review/:assignmentId', requireAuth('student'), h(async (req, re
 app.get('/api/take/:assignmentId', requireAuth('student'), h(async (req, res) => {
   const a = await get('SELECT * FROM assignments WHERE id = ? AND student_id = ?', [req.params.assignmentId, req.user.id]);
   if (!a) return res.status(404).json({ error: 'Assignment not found.' });
+  if (!membershipActive(await membershipForTest(req.user.id, a.test_id)))
+    return res.status(403).json({ error: 'Your access to this organization has ended. Please contact the institute.' });
   let attempt = await get('SELECT * FROM attempts WHERE assignment_id = ?', [a.id]);
   if (attempt && attempt.submitted_at)
     return res.status(409).json({ error: 'You have already submitted this test.' });
@@ -1336,6 +1400,8 @@ app.post('/api/take/:assignmentId/progress', requireAuth('student'), h(async (re
 app.post('/api/submit/:assignmentId', requireAuth('student'), h(async (req, res) => {
   const a = await get('SELECT * FROM assignments WHERE id = ? AND student_id = ?', [req.params.assignmentId, req.user.id]);
   if (!a) return res.status(404).json({ error: 'Assignment not found.' });
+  if (!membershipActive(await membershipForTest(req.user.id, a.test_id)))
+    return res.status(403).json({ error: 'Your access to this organization has ended. Please contact the institute.' });
   const existing = await get('SELECT * FROM attempts WHERE assignment_id = ?', [a.id]);
   if (existing && existing.submitted_at)
     return res.status(409).json({ error: 'You have already submitted this test.' });
