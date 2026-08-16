@@ -1049,7 +1049,7 @@ const ticketView = (t) => ({
   orgId: t.org_id, orgName: t.org_name || null, teacherName: t.teacher_name || null, teacherEmail: t.teacher_email || null,
   createdAt: t.created_at, updatedAt: t.updated_at, messageCount: t.message_count,
 });
-const messageView = (m) => ({ id: m.id, authorRole: m.author_role, authorName: m.author_name, body: m.body, at: m.created_at });
+const messageView = (m) => ({ id: m.id, authorRole: m.author_role, authorName: m.author_name, body: m.body, image: m.image_url || '', at: m.created_at });
 
 // --- Teacher: raise + track their own tickets ---
 app.post('/api/tickets', requireAuth('teacher'), h(async (req, res) => {
@@ -1057,6 +1057,7 @@ app.post('/api/tickets', requireAuth('teacher'), h(async (req, res) => {
   const message = (req.body.message || '').trim();
   const category = (req.body.category || 'Other').trim().slice(0, 60) || 'Other';
   const priority = TICKET_PRIORITIES.includes(req.body.priority) ? req.body.priority : 'normal';
+  const image = safeImageUrl(req.body.image);
   if (!subject) return res.status(400).json({ error: 'Please add a short subject.' });
   if (!message) return res.status(400).json({ error: 'Please describe the issue.' });
   const id = await tx(async (t) => {
@@ -1065,8 +1066,8 @@ app.post('/api/tickets', requireAuth('teacher'), h(async (req, res) => {
       [req.user.org_id, req.user.id, subject.slice(0, 200), category, priority]
     )).rows[0].id;
     await t.run(
-      "INSERT INTO ticket_messages (ticket_id, author_id, author_role, author_name, body) VALUES (?, ?, 'teacher', ?, ?)",
-      [tid, req.user.id, req.user.name || '', message]
+      "INSERT INTO ticket_messages (ticket_id, author_id, author_role, author_name, body, image_url) VALUES (?, ?, 'teacher', ?, ?, ?)",
+      [tid, req.user.id, req.user.name || '', message, image]
     );
     return tid;
   });
@@ -1091,12 +1092,13 @@ app.get('/api/tickets/:id', requireAuth('teacher'), h(async (req, res) => {
 
 app.post('/api/tickets/:id/messages', requireAuth('teacher'), h(async (req, res) => {
   const body = (req.body.body || '').trim();
-  if (!body) return res.status(400).json({ error: 'Message cannot be empty.' });
+  const image = safeImageUrl(req.body.image);
+  if (!body && !image) return res.status(400).json({ error: 'Message cannot be empty.' });
   const t = await get('SELECT * FROM tickets WHERE id = ? AND teacher_id = ?', [Number(req.params.id), req.user.id]);
   if (!t) return res.status(404).json({ error: 'Ticket not found.' });
   if (t.status === 'closed') return res.status(409).json({ error: 'This ticket is closed. Raise a new one if you still need help.' });
-  await run("INSERT INTO ticket_messages (ticket_id, author_id, author_role, author_name, body) VALUES (?, ?, 'teacher', ?, ?)",
-    [t.id, req.user.id, req.user.name || '', body]);
+  await run("INSERT INTO ticket_messages (ticket_id, author_id, author_role, author_name, body, image_url) VALUES (?, ?, 'teacher', ?, ?, ?)",
+    [t.id, req.user.id, req.user.name || '', body, image]);
   // A teacher reply reopens a resolved ticket so it comes back to the queue.
   const nextStatus = t.status === 'resolved' ? 'open' : t.status;
   await run('UPDATE tickets SET updated_at = NOW(), status = ? WHERE id = ?', [nextStatus, t.id]);
@@ -1128,11 +1130,12 @@ app.get('/api/support/tickets/:id', requireSupport, h(async (req, res) => {
 
 app.post('/api/support/tickets/:id/messages', requireSupport, h(async (req, res) => {
   const body = (req.body.body || '').trim();
-  if (!body) return res.status(400).json({ error: 'Message cannot be empty.' });
+  const image = safeImageUrl(req.body.image);
+  if (!body && !image) return res.status(400).json({ error: 'Message cannot be empty.' });
   const t = await get('SELECT * FROM tickets WHERE id = ?', [Number(req.params.id)]);
   if (!t) return res.status(404).json({ error: 'Ticket not found.' });
-  await run("INSERT INTO ticket_messages (ticket_id, author_id, author_role, author_name, body) VALUES (?, ?, 'support', ?, ?)",
-    [t.id, req.user.id, req.user.name || 'Support', body]);
+  await run("INSERT INTO ticket_messages (ticket_id, author_id, author_role, author_name, body, image_url) VALUES (?, ?, 'support', ?, ?, ?)",
+    [t.id, req.user.id, req.user.name || 'Support', body, image]);
   // Replying to a brand-new ticket moves it into 'in_progress'.
   const nextStatus = t.status === 'open' ? 'in_progress' : t.status;
   await run('UPDATE tickets SET updated_at = NOW(), status = ? WHERE id = ?', [nextStatus, t.id]);
@@ -1173,20 +1176,36 @@ app.post('/api/support-agents', requireAdmin, h(async (req, res) => {
   res.json({ id, name, email });
 }));
 
-// Accepts a base64 data URL, saves it as an image file, returns its public URL.
+// Save a base64 data URL as an image file. Returns { url } or { status, error }.
 const IMAGE_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
-app.post('/api/upload', requireAuth('teacher'), requireActiveSubscription, (req, res) => {
-  const dataUrl = req.body.dataUrl || '';
-  const m = /^data:([^;]+);base64,(.+)$/s.exec(dataUrl);
-  if (!m) return res.status(400).json({ error: 'Invalid image data.' });
+function saveDataUrlImage(dataUrl, maxBytes) {
+  const m = /^data:([^;]+);base64,(.+)$/s.exec(dataUrl || '');
+  if (!m) return { status: 400, error: 'Invalid image data.' };
   const ext = IMAGE_EXT[m[1].toLowerCase()];
-  if (!ext) return res.status(400).json({ error: 'Only PNG, JPG, GIF, or WebP images are allowed.' });
+  if (!ext) return { status: 400, error: 'Only PNG, JPG, GIF, or WebP images are allowed.' };
   const buf = Buffer.from(m[2], 'base64');
-  if (buf.length > 5 * 1024 * 1024) return res.status(413).json({ error: 'Image must be 5 MB or smaller.' });
+  if (buf.length > maxBytes) return { status: 413, error: `Image must be ${Math.round(maxBytes / (1024 * 1024))} MB or smaller.` };
   const name = crypto.randomBytes(16).toString('hex') + '.' + ext;
   fs.writeFileSync(path.join(UPLOAD_DIR, name), buf);
-  res.json({ url: '/uploads/' + name });
+  return { url: '/uploads/' + name };
+}
+
+app.post('/api/upload', requireAuth('teacher'), requireActiveSubscription, (req, res) => {
+  const r = saveDataUrlImage(req.body.dataUrl, 5 * 1024 * 1024);
+  if (r.error) return res.status(r.status).json({ error: r.error });
+  res.json({ url: r.url });
 });
+
+// Screenshot upload for support tickets: usable by teachers (even in read-only
+// mode — they may need help precisely because something's broken) and support
+// agents. Capped at 2 MB.
+app.post('/api/ticket-upload', h(async (req, res) => {
+  if (!req.user || !['teacher', 'support'].includes(req.user.role))
+    return res.status(403).json({ error: 'Not allowed.' });
+  const r = saveDataUrlImage(req.body.dataUrl, 2 * 1024 * 1024);
+  if (r.error) return res.status(r.status).json({ error: r.error });
+  res.json({ url: r.url });
+}));
 
 // A test is closed once its deadline (if any) is in the past.
 function isClosed(dueDate) {

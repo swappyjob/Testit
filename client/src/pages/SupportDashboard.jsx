@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { api } from '../api.js';
 import { useRequireRole } from '../auth.js';
 import { DashboardBar, Msg } from '../components.jsx';
-import { StatusPill, fmtWhen, STATUS } from '../teacher/SupportTickets.jsx';
+import { StatusPill, fmtWhen, STATUS, ScreenshotAttach, MsgImage } from '../teacher/SupportTickets.jsx';
 
 const FILTERS = [['', 'All'], ['open', 'Open'], ['in_progress', 'In progress'], ['resolved', 'Resolved'], ['closed', 'Closed']];
 
@@ -62,13 +62,14 @@ export default function SupportDashboard() {
 function TicketPanel({ id, onClose, onChanged }) {
   const [data, setData] = useState(null);
   const [reply, setReply] = useState('');
+  const [replyImage, setReplyImage] = useState('');
   const [msg, setMsg] = useState('');
   const load = () => api('/api/support/tickets/' + id).then(setData).catch((e) => setMsg(e.message));
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [id]);
 
   async function send() {
-    if (!reply.trim()) return;
-    try { await api('/api/support/tickets/' + id + '/messages', 'POST', { body: reply }); setReply(''); await load(); onChanged(); }
+    if (!reply.trim() && !replyImage) return;
+    try { await api('/api/support/tickets/' + id + '/messages', 'POST', { body: reply, image: replyImage }); setReply(''); setReplyImage(''); await load(); onChanged(); }
     catch (e) { setMsg(e.message); }
   }
   async function setStatus(status) {
@@ -101,15 +102,17 @@ function TicketPanel({ id, onClose, onChanged }) {
                 <div key={m.id} style={{ display: 'flex', justifyContent: m.authorRole === 'support' ? 'flex-end' : 'flex-start', margin: '8px 0' }}>
                   <div style={{ maxWidth: '82%', padding: '8px 12px', borderRadius: 10, background: m.authorRole === 'support' ? '#eef2ff' : '#f1f5f9' }}>
                     <div className="muted" style={{ fontSize: 12, marginBottom: 2 }}>{m.authorRole === 'support' ? '🛟 ' + (m.authorName || 'Support') : m.authorName} · {fmtWhen(m.at)}</div>
-                    <div style={{ whiteSpace: 'pre-wrap' }}>{m.body}</div>
+                    {m.body && <div style={{ whiteSpace: 'pre-wrap' }}>{m.body}</div>}
+                    <MsgImage src={m.image} />
                   </div>
                 </div>
               ))}
             </div>
             <div className="row" style={{ gap: 8, alignItems: 'flex-end' }}>
               <textarea value={reply} onChange={(e) => setReply(e.target.value)} placeholder="Reply to the teacher…" style={{ flex: 1, minHeight: 70 }} />
-              <button className="btn" onClick={send} disabled={!reply.trim()}>Send</button>
+              <button className="btn" onClick={send} disabled={!reply.trim() && !replyImage}>Send</button>
             </div>
+            <div style={{ marginTop: 6 }}><ScreenshotAttach image={replyImage} onChange={setReplyImage} /></div>
           </>
         )}
       </div>

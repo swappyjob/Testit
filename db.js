@@ -284,8 +284,10 @@ async function init() {
     author_role TEXT NOT NULL,
     author_name TEXT NOT NULL DEFAULT '',
     body        TEXT NOT NULL,
+    image_url   TEXT NOT NULL DEFAULT '',
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`);
+  await pool.query("ALTER TABLE ticket_messages ADD COLUMN IF NOT EXISTS image_url TEXT NOT NULL DEFAULT ''");
   await pool.query('CREATE INDEX IF NOT EXISTS tickets_status_idx ON tickets (status, updated_at DESC)');
   await pool.query('CREATE INDEX IF NOT EXISTS ticket_messages_ticket_idx ON ticket_messages (ticket_id, created_at)');
 

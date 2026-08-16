@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BASE = process.env.TEST_BASE || 'http://localhost:3000';
+const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
 function makeJar() {
   const jar = {};
   return {
@@ -39,12 +40,19 @@ const supUser = (await call(support, '/api/login', 'POST', { email: supEmail, pa
 if (supUser.role !== 'support') throw new Error('support login role should be support');
 ok('support agent created and logged in');
 
-// A teacher raises a ticket.
+// A teacher raises a ticket — with a screenshot attached.
 const teacher = await registerTeacher(BASE, makeJar, call, { name: 'Ms Rao', email: `t${rand}@x.com`, password: 'secret123' });
+const shot = (await call(teacher, '/api/ticket-upload', 'POST', { dataUrl: PNG })).data.url;
+if (!/^\/uploads\/[\w.-]+\.png$/.test(shot)) throw new Error('ticket screenshot should upload to /uploads');
 const { id: ticketId } = (await call(teacher, '/api/tickets', 'POST',
-  { subject: 'Cannot add an image to a question', category: 'Test builder', priority: 'high', message: 'The upload button does nothing.' })).data;
+  { subject: 'Cannot add an image to a question', category: 'Test builder', priority: 'high', message: 'The upload button does nothing.', image: shot })).data;
 if (!ticketId) throw new Error('ticket should be created');
-ok('teacher raises a support ticket');
+ok('teacher raises a support ticket with a screenshot');
+
+// The screenshot is stored on the first message and visible to support.
+const firstMsg = (await call(teacher, '/api/tickets/' + ticketId)).data.messages[0];
+if (firstMsg.image !== shot) throw new Error('the screenshot should be attached to the ticket');
+ok('the attached screenshot is saved on the ticket');
 
 // Teacher sees it in their list (status open, one message = the description).
 let mine = (await call(teacher, '/api/tickets')).data.tickets;
