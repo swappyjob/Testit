@@ -70,10 +70,15 @@ if (mine.map((a) => a.title).sort().join(',') !== 'Mock A,Mock B') throw new Err
 if (!mine.every((a) => a.orgName)) throw new Error('each test should be labelled with its organization');
 ok('student sees mock tests from BOTH organizations, each labelled by org');
 
+// The org switcher lists both active organizations.
+if ((await call(student, '/api/my-orgs')).data.orgs.length !== 2) throw new Error('my-orgs should list both organizations');
+ok('my-orgs lists both organizations (for the switcher / login picker)');
+
 // Disabling in Org A hides only Org A's test; Org B remains.
 await call(orgA, '/api/students/' + user.id, 'PATCH', { disabled: true });
 mine = (await call(student, '/api/my-assignments')).data.assignments;
 if (mine.length !== 1 || mine[0].title !== 'Mock B') throw new Error('disabling in Org A should hide only Org A’s test');
+if ((await call(student, '/api/my-orgs')).data.orgs.length !== 1) throw new Error('a disabled org should drop out of my-orgs');
 ok('disabling the student in Org A hides only Org A’s test; Org B’s remains');
 
 // The student is still active in Org B (per-org isolation).

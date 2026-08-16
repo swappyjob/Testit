@@ -1276,13 +1276,25 @@ function membershipActive(m) {
   return !!m && !m.disabled && !isExpired(m.access_until);
 }
 
+// The organizations a student is an active member of (for the org switcher).
+app.get('/api/my-orgs', requireAuth('student'), h(async (req, res) => {
+  const rows = await all(
+    `SELECT o.id, o.name, st.access_until
+       FROM signup_tokens st JOIN organizations o ON o.id = st.org_id
+      WHERE st.student_id = ? AND st.invite_role = 'student' AND st.used = 1 AND st.disabled = 0
+      ORDER BY o.name`,
+    [req.user.id]
+  );
+  res.json({ orgs: rows.filter((r) => !isExpired(r.access_until)).map((r) => ({ id: r.id, name: r.name })) });
+}));
+
 app.get('/api/my-assignments', requireAuth('student'), h(async (req, res) => {
   // Only surface tests from organizations where the student's membership is
   // active (enrolled, not disabled). Each test is labelled with its org so a
   // student enrolled in several institutes can tell them apart.
   const rows = await all(
     `SELECT a.id AS assignment_id, t.id AS test_id, t.title, t.description, t.due_date,
-            o.name AS org_name, st.access_until AS membership_access,
+            o.id AS org_id, o.name AS org_name, st.access_until AS membership_access,
             (SELECT COUNT(*) FROM questions q WHERE q.test_id = t.id AND q.archived = 0) AS question_count,
             at.id AS attempt_id, at.submitted_at, at.auto_score, at.manual_score,
             at.max_score, at.needs_grading
@@ -1304,6 +1316,7 @@ app.get('/api/my-assignments', requireAuth('student'), h(async (req, res) => {
       testId: r.test_id,
       title: r.title,
       description: r.description,
+      orgId: r.org_id || null,
       orgName: r.org_name || null,
       questionCount: r.question_count,
       submitted: !!r.submitted_at,
