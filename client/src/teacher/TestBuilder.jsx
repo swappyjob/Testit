@@ -344,6 +344,8 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
       {/* ---------------- QUESTION PAGE ---------------- */}
       {q && (
         <div className="q-card">
+          <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+          <div style={{ flex: '1 1 360px', minWidth: 0 }}>
           <label>Question type</label>
           <select value={q.type} onChange={(e) => changeType(qIndex, e.target.value)} style={{ width: 'auto' }}>
             <option value="mcq">Single choice (one correct)</option>
@@ -441,9 +443,11 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
             <button className="btn ghost small" type="button" onClick={() => saveToBank(qIndex)}>💾 Save this question to the bank</button>
             {bankMsg && <span className="muted">{bankMsg}</span>}
           </div>
+          </div>{/* end left (editor) column */}
 
-          {/* Live preview — exactly how the question renders for students. */}
-          <div style={{ marginTop: 16, padding: 12, background: '#f8fafc', border: '1px solid var(--line)', borderRadius: 8 }}>
+          {/* Live preview — exactly how the question renders for students.
+              Sticky right column so it stays in view while the teacher types. */}
+          <div style={{ flex: '1 1 280px', minWidth: 0, position: 'sticky', top: 12, alignSelf: 'flex-start', padding: 12, background: '#f8fafc', border: '1px solid var(--line)', borderRadius: 8 }}>
             <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>👁 Student preview</div>
             <div style={{ fontWeight: 600 }}>Q{page}. <MathText text={q.prompt || 'Your question will appear here.'} /></div>
             {q.image && <img src={q.image} alt="" style={{ maxWidth: '100%', maxHeight: 220, border: '1px solid var(--line)', borderRadius: 8, display: 'block', margin: '8px 0' }} />}
@@ -455,7 +459,8 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
               </div>
             )}
             {q.explanation && <div className="muted" style={{ marginTop: 6, fontSize: 13 }}>💡 <MathText text={q.explanation} /></div>}
-          </div>
+          </div>{/* end right (preview) column */}
+          </div>{/* end two-column layout */}
         </div>
       )}
 
