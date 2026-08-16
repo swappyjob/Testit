@@ -1335,6 +1335,10 @@ app.get('/api/my-assignments', requireAuth('student'), h(async (req, res) => {
 app.get('/api/my-review/:assignmentId', requireAuth('student'), h(async (req, res) => {
   const a = await get('SELECT * FROM assignments WHERE id = ? AND student_id = ?', [req.params.assignmentId, req.user.id]);
   if (!a) return res.status(404).json({ error: 'Assignment not found.' });
+  // Nothing from an organization the student is disabled/expired in is visible —
+  // including past results.
+  if (!membershipActive(await membershipForTest(req.user.id, a.test_id)))
+    return res.status(403).json({ error: 'This test belongs to an organization you no longer have access to.' });
   const attempt = await get('SELECT * FROM attempts WHERE assignment_id = ? AND submitted_at IS NOT NULL', [a.id]);
   if (!attempt) return res.status(403).json({ error: 'You can review this test only after you submit it.' });
   const test = await get('SELECT title FROM tests WHERE id = ?', [a.test_id]);
@@ -1401,6 +1405,7 @@ app.get('/api/take/:assignmentId', requireAuth('student'), h(async (req, res) =>
 app.post('/api/take/:assignmentId/progress', requireAuth('student'), h(async (req, res) => {
   const a = await get('SELECT * FROM assignments WHERE id = ? AND student_id = ?', [req.params.assignmentId, req.user.id]);
   if (!a) return res.status(404).json({ error: 'Assignment not found.' });
+  if (!membershipActive(await membershipForTest(req.user.id, a.test_id))) return res.json({ ok: false });
   const attempt = await get('SELECT id, submitted_at FROM attempts WHERE assignment_id = ?', [a.id]);
   if (!attempt || attempt.submitted_at) return res.json({ ok: false });
   const answers = (req.body.answers && typeof req.body.answers === 'object') ? req.body.answers : {};

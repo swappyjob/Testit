@@ -74,12 +74,24 @@ ok('student sees mock tests from BOTH organizations, each labelled by org');
 if ((await call(student, '/api/my-orgs')).data.orgs.length !== 2) throw new Error('my-orgs should list both organizations');
 ok('my-orgs lists both organizations (for the switcher / login picker)');
 
+// Take & submit Org A's test, so there's a past result to check after disabling.
+const aidA = mine.find((a) => a.title === 'Mock A').assignmentId;
+const qA = (await call(student, '/api/take/' + aidA)).data.questions[0].id;
+await call(student, '/api/submit/' + aidA, 'POST', { answers: { [qA]: 'true' } });
+if ((await call(student, '/api/my-review/' + aidA)).status !== 200) throw new Error('active student should review their own result');
+ok('student takes, submits and can review Org A’s test while active');
+
 // Disabling in Org A hides only Org A's test; Org B remains.
 await call(orgA, '/api/students/' + user.id, 'PATCH', { disabled: true });
 mine = (await call(student, '/api/my-assignments')).data.assignments;
 if (mine.length !== 1 || mine[0].title !== 'Mock B') throw new Error('disabling in Org A should hide only Org A’s test');
 if ((await call(student, '/api/my-orgs')).data.orgs.length !== 1) throw new Error('a disabled org should drop out of my-orgs');
 ok('disabling the student in Org A hides only Org A’s test; Org B’s remains');
+
+// NOTHING from the disabled org is visible any more — not the test, not the past result.
+if ((await call(student, '/api/take/' + aidA, 'GET', undefined, false)).status !== 403) throw new Error("a disabled org's test must not open (403)");
+if ((await call(student, '/api/my-review/' + aidA, 'GET', undefined, false)).status !== 403) throw new Error("a disabled org's past results must not be reviewable (403)");
+ok('a disabled org’s tests AND past results are both blocked (403)');
 
 // The student is still active in Org B (per-org isolation).
 const bRow = (await call(orgB, '/api/students')).data.students.find((s) => s.email === email);
