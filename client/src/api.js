@@ -19,7 +19,8 @@ export async function currentUser() {
 
 // Where each role belongs after logging in.
 export function dashboardFor(role) {
-  return role === 'admin' ? '/admin' : role === 'teacher' ? '/teacher' : '/student';
+  return role === 'admin' ? '/admin' : role === 'support' ? '/support'
+    : role === 'teacher' ? '/teacher' : '/student';
 }
 
 export async function logout() {

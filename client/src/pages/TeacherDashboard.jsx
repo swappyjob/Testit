@@ -9,6 +9,7 @@ import TeachersTab from '../teacher/TeachersTab.jsx';
 import SubscriptionTab from '../teacher/SubscriptionTab.jsx';
 import QuestionBank from '../teacher/QuestionBank.jsx';
 import AuditLogs from '../teacher/AuditLogs.jsx';
+import SupportTickets from '../teacher/SupportTickets.jsx';
 
 export default function TeacherDashboard() {
   const me = useRequireRole('teacher', '/teacher-login');
@@ -87,6 +88,7 @@ export default function TeacherDashboard() {
           <Tab id="teachers" label="Teachers" icon="🧑‍🏫" />
           <Tab id="bank" label="Question Bank" icon="📚" />
           <Tab id="audit" label="Audit Logs" icon="📜" />
+          <Tab id="support" label="Support" icon="🎫" />
         </div>
         {tab === 'tests' && <MyTests onEdit={openEdit} onResumeDraft={openDraft} onCreate={openCreate} readOnly={readOnly} />}
         {tab === 'create' && !readOnly && <TestBuilder key={editTestId ? 'e' + editTestId : draftId ? 'd' + draftId : 'new'} editId={editTestId} draftId={draftId} onSaved={afterSave} onCancel={cancelBuild} />}
@@ -94,6 +96,7 @@ export default function TeacherDashboard() {
         {tab === 'teachers' && <TeachersTab readOnly={readOnly} />}
         {tab === 'bank' && <QuestionBank readOnly={readOnly} />}
         {tab === 'audit' && <AuditLogs />}
+        {tab === 'support' && <SupportTickets />}
       </div>
       {showProfile && <ProfileModal me={me} initialPane={profilePane} onClose={() => setShowProfile(false)} />}
     </>

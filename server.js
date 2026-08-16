@@ -153,6 +153,13 @@ function requireAdmin(req, res, next) {
   next();
 }
 
+// A support-team agent (works the ticket queue).
+function requireSupport(req, res, next) {
+  if (!req.user) return res.status(401).json({ error: 'Please log in.' });
+  if (req.user.role !== 'support') return res.status(403).json({ error: 'Support access only.' });
+  next();
+}
+
 // When a teacher's organization subscription has expired, the whole org drops to
 // read-only: block every create/edit/delete. Reads are unaffected. Admins and
 // students are not subject to this check.
@@ -1030,6 +1037,140 @@ app.get('/api/audit', requireAuth('teacher'), h(async (req, res) => {
       entityType: r.entity_type, entityLabel: r.entity_label, details: r.details,
     })),
   });
+}));
+
+// ============================================================================
+// SUPPORT TICKETS  (teachers raise; the support team resolves)
+// ============================================================================
+const TICKET_STATUSES = ['open', 'in_progress', 'resolved', 'closed'];
+const TICKET_PRIORITIES = ['low', 'normal', 'high'];
+const ticketView = (t) => ({
+  id: t.id, subject: t.subject, category: t.category, priority: t.priority, status: t.status,
+  orgId: t.org_id, orgName: t.org_name || null, teacherName: t.teacher_name || null, teacherEmail: t.teacher_email || null,
+  createdAt: t.created_at, updatedAt: t.updated_at, messageCount: t.message_count,
+});
+const messageView = (m) => ({ id: m.id, authorRole: m.author_role, authorName: m.author_name, body: m.body, at: m.created_at });
+
+// --- Teacher: raise + track their own tickets ---
+app.post('/api/tickets', requireAuth('teacher'), h(async (req, res) => {
+  const subject = (req.body.subject || '').trim();
+  const message = (req.body.message || '').trim();
+  const category = (req.body.category || 'Other').trim().slice(0, 60) || 'Other';
+  const priority = TICKET_PRIORITIES.includes(req.body.priority) ? req.body.priority : 'normal';
+  if (!subject) return res.status(400).json({ error: 'Please add a short subject.' });
+  if (!message) return res.status(400).json({ error: 'Please describe the issue.' });
+  const id = await tx(async (t) => {
+    const tid = (await t.run(
+      'INSERT INTO tickets (org_id, teacher_id, subject, category, priority) VALUES (?, ?, ?, ?, ?) RETURNING id',
+      [req.user.org_id, req.user.id, subject.slice(0, 200), category, priority]
+    )).rows[0].id;
+    await t.run(
+      "INSERT INTO ticket_messages (ticket_id, author_id, author_role, author_name, body) VALUES (?, ?, 'teacher', ?, ?)",
+      [tid, req.user.id, req.user.name || '', message]
+    );
+    return tid;
+  });
+  res.json({ id });
+}));
+
+app.get('/api/tickets', requireAuth('teacher'), h(async (req, res) => {
+  const rows = await all(
+    `SELECT t.*, (SELECT COUNT(*) FROM ticket_messages m WHERE m.ticket_id = t.id) AS message_count
+       FROM tickets t WHERE t.teacher_id = ? ORDER BY t.updated_at DESC`,
+    [req.user.id]
+  );
+  res.json({ tickets: rows.map(ticketView) });
+}));
+
+app.get('/api/tickets/:id', requireAuth('teacher'), h(async (req, res) => {
+  const t = await get('SELECT * FROM tickets WHERE id = ? AND teacher_id = ?', [Number(req.params.id), req.user.id]);
+  if (!t) return res.status(404).json({ error: 'Ticket not found.' });
+  const messages = await all('SELECT * FROM ticket_messages WHERE ticket_id = ? ORDER BY created_at', [t.id]);
+  res.json({ ticket: ticketView({ ...t, message_count: messages.length }), messages: messages.map(messageView) });
+}));
+
+app.post('/api/tickets/:id/messages', requireAuth('teacher'), h(async (req, res) => {
+  const body = (req.body.body || '').trim();
+  if (!body) return res.status(400).json({ error: 'Message cannot be empty.' });
+  const t = await get('SELECT * FROM tickets WHERE id = ? AND teacher_id = ?', [Number(req.params.id), req.user.id]);
+  if (!t) return res.status(404).json({ error: 'Ticket not found.' });
+  if (t.status === 'closed') return res.status(409).json({ error: 'This ticket is closed. Raise a new one if you still need help.' });
+  await run("INSERT INTO ticket_messages (ticket_id, author_id, author_role, author_name, body) VALUES (?, ?, 'teacher', ?, ?)",
+    [t.id, req.user.id, req.user.name || '', body]);
+  // A teacher reply reopens a resolved ticket so it comes back to the queue.
+  const nextStatus = t.status === 'resolved' ? 'open' : t.status;
+  await run('UPDATE tickets SET updated_at = NOW(), status = ? WHERE id = ?', [nextStatus, t.id]);
+  res.json({ ok: true });
+}));
+
+// --- Support: the whole queue ---
+const supportTicketRow = `SELECT t.*, o.name AS org_name, u.name AS teacher_name, u.email AS teacher_email,
+       (SELECT COUNT(*) FROM ticket_messages m WHERE m.ticket_id = t.id) AS message_count
+       FROM tickets t LEFT JOIN organizations o ON o.id = t.org_id LEFT JOIN users u ON u.id = t.teacher_id`;
+
+app.get('/api/support/tickets', requireSupport, h(async (req, res) => {
+  const status = req.query.status;
+  const where = TICKET_STATUSES.includes(status) ? 'WHERE t.status = ?' : '';
+  const rows = await all(`${supportTicketRow} ${where} ORDER BY t.updated_at DESC LIMIT 300`,
+    where ? [status] : []);
+  const counts = {};
+  for (const s of TICKET_STATUSES) counts[s] = 0;
+  (await all('SELECT status, COUNT(*) AS c FROM tickets GROUP BY status')).forEach((r) => { counts[r.status] = r.c; });
+  res.json({ tickets: rows.map(ticketView), counts });
+}));
+
+app.get('/api/support/tickets/:id', requireSupport, h(async (req, res) => {
+  const t = await get(`${supportTicketRow} WHERE t.id = ?`, [Number(req.params.id)]);
+  if (!t) return res.status(404).json({ error: 'Ticket not found.' });
+  const messages = await all('SELECT * FROM ticket_messages WHERE ticket_id = ? ORDER BY created_at', [t.id]);
+  res.json({ ticket: ticketView(t), messages: messages.map(messageView) });
+}));
+
+app.post('/api/support/tickets/:id/messages', requireSupport, h(async (req, res) => {
+  const body = (req.body.body || '').trim();
+  if (!body) return res.status(400).json({ error: 'Message cannot be empty.' });
+  const t = await get('SELECT * FROM tickets WHERE id = ?', [Number(req.params.id)]);
+  if (!t) return res.status(404).json({ error: 'Ticket not found.' });
+  await run("INSERT INTO ticket_messages (ticket_id, author_id, author_role, author_name, body) VALUES (?, ?, 'support', ?, ?)",
+    [t.id, req.user.id, req.user.name || 'Support', body]);
+  // Replying to a brand-new ticket moves it into 'in_progress'.
+  const nextStatus = t.status === 'open' ? 'in_progress' : t.status;
+  await run('UPDATE tickets SET updated_at = NOW(), status = ? WHERE id = ?', [nextStatus, t.id]);
+  res.json({ ok: true });
+}));
+
+app.patch('/api/support/tickets/:id', requireSupport, h(async (req, res) => {
+  const status = req.body.status;
+  const priority = req.body.priority;
+  if (status !== undefined && !TICKET_STATUSES.includes(status)) return res.status(400).json({ error: 'Invalid status.' });
+  if (priority !== undefined && !TICKET_PRIORITIES.includes(priority)) return res.status(400).json({ error: 'Invalid priority.' });
+  const t = await get('SELECT id FROM tickets WHERE id = ?', [Number(req.params.id)]);
+  if (!t) return res.status(404).json({ error: 'Ticket not found.' });
+  const sets = [], args = [];
+  if (status !== undefined) { sets.push('status = ?'); args.push(status); }
+  if (priority !== undefined) { sets.push('priority = ?'); args.push(priority); }
+  if (!sets.length) return res.json({ ok: true });
+  args.push(t.id);
+  await run(`UPDATE tickets SET ${sets.join(', ')}, updated_at = NOW() WHERE id = ?`, args);
+  res.json({ ok: true });
+}));
+
+// --- Admin: manage support-team accounts ---
+app.get('/api/support-agents', requireAdmin, h(async (req, res) => {
+  const rows = await all("SELECT id, name, email FROM users WHERE role = 'support' ORDER BY id");
+  res.json({ agents: rows });
+}));
+app.post('/api/support-agents', requireAdmin, h(async (req, res) => {
+  const name = (req.body.name || '').trim();
+  const email = (req.body.email || '').trim().toLowerCase();
+  const password = req.body.password || '';
+  if (!name || !email) return res.status(400).json({ error: 'Name and email are required.' });
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: 'Enter a valid email address.' });
+  if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters.' });
+  if (await get('SELECT id FROM users WHERE email = ?', [email])) return res.status(409).json({ error: 'A user with that email already exists.' });
+  const id = (await run("INSERT INTO users (role, name, email, password_hash) VALUES ('support', ?, ?, ?) RETURNING id",
+    [name, email, hashPassword(password)])).rows[0].id;
+  res.json({ id, name, email });
 }));
 
 // Accepts a base64 data URL, saves it as an image file, returns its public URL.

@@ -13,6 +13,7 @@ import TakeTest from './pages/TakeTest.jsx';
 import StudentReview from './pages/StudentReview.jsx';
 import TeacherDashboard from './pages/TeacherDashboard.jsx';
 import AdminDashboard from './pages/AdminDashboard.jsx';
+import SupportDashboard from './pages/SupportDashboard.jsx';
 
 const teacherLogin = {
   role: 'teacher', title: 'Teacher login',
@@ -28,6 +29,10 @@ const adminLogin = {
   role: 'admin', title: 'Admin login', subtitle: 'Platform administrator sign-in.',
   footer: <a href="/forgot-password">Forgot password?</a>,
 };
+const supportLogin = {
+  role: 'support', title: 'Support login', subtitle: 'Support-team sign-in.',
+  footer: <a href="/forgot-password">Forgot password?</a>,
+};
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
@@ -37,6 +42,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
         <Route path="/teacher-login" element={<Login {...teacherLogin} />} />
         <Route path="/student-login" element={<Login {...studentLogin} />} />
         <Route path="/admin-login" element={<Login {...adminLogin} />} />
+        <Route path="/support-login" element={<Login {...supportLogin} />} />
         <Route path="/signup" element={<Signup />} />
         <Route path="/forgot-password" element={<ForgotPassword />} />
         <Route path="/reset" element={<Reset />} />
@@ -45,6 +51,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
         <Route path="/review" element={<StudentReview />} />
         <Route path="/teacher" element={<TeacherDashboard />} />
         <Route path="/admin" element={<AdminDashboard />} />
+        <Route path="/support" element={<SupportDashboard />} />
         <Route path="*" element={<Landing />} />
       </Routes>
     </BrowserRouter>

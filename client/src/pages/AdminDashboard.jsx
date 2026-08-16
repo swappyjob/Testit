@@ -48,6 +48,8 @@ export default function AdminDashboard() {
 
         <AdminsCard />
 
+        <SupportAgentsCard />
+
         {plans.length > 0 && (
           <div className="card">
             <h2>Pricing plans</h2>
@@ -118,6 +120,43 @@ function AdminsCard() {
         <div><label>Temporary password (min 6 characters)</label><PasswordInput value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></div>
       </div>
       <div style={{ marginTop: 14 }}><button className="btn" onClick={addAdmin}>Create administrator</button></div>
+    </div>
+  );
+}
+
+// Platform admins create + list the support team (a separate role that only
+// works the ticket queue — no org/plan powers).
+function SupportAgentsCard() {
+  const [agents, setAgents] = useState(null);
+  const [form, setForm] = useState({ name: '', email: '', password: '' });
+  const [msg, setMsg] = useState(null);
+  const load = () => api('/api/support-agents').then((d) => setAgents(d.agents)).catch(() => {});
+  useEffect(() => { load(); }, []);
+  async function add() {
+    try {
+      await api('/api/support-agents', 'POST', form);
+      setForm({ name: '', email: '', password: '' });
+      setMsg({ ok: true, text: 'Support agent created. They log in at /support-login.' });
+      load();
+    } catch (e) { setMsg({ ok: false, text: e.message }); }
+  }
+  return (
+    <div className="card">
+      <h2>Support team</h2>
+      <p className="muted">Support agents work the ticket queue at <b>/support-login</b>. They can't manage organizations or plans.</p>
+      {msg && <Msg text={msg.text} kind={msg.ok ? 'ok' : 'error'} />}
+      {agents && agents.length > 0 && (
+        <table>
+          <thead><tr><th>Name</th><th>Email</th></tr></thead>
+          <tbody>{agents.map((a) => <tr key={a.id}><td>{a.name}</td><td>{a.email}</td></tr>)}</tbody>
+        </table>
+      )}
+      <div className="grid two" style={{ marginTop: 14 }}>
+        <div><label>Name</label><input type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></div>
+        <div><label>Email</label><input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></div>
+        <div><label>Temporary password (min 6 characters)</label><PasswordInput value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></div>
+      </div>
+      <div style={{ marginTop: 14 }}><button className="btn" onClick={add}>Create support agent</button></div>
     </div>
   );
 }

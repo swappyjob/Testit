@@ -219,9 +219,9 @@ async function init() {
   await pool.query(`UPDATE signup_tokens t SET disabled = 1
                       FROM users u
                      WHERE u.id = t.student_id AND u.disabled = 1 AND t.invite_role = 'student' AND t.disabled = 0`);
-  // Allow the new 'admin' role on databases created before it existed.
+  // Allow the 'admin' and 'support' roles on databases created before they existed.
   await pool.query('ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check');
-  await pool.query("ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('admin', 'teacher', 'student'))");
+  await pool.query("ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('admin', 'teacher', 'student', 'support'))");
   // Allow the new 'multi' (multiple correct answers) question type on older DBs.
   await pool.query('ALTER TABLE questions DROP CONSTRAINT IF EXISTS questions_type_check');
   await pool.query("ALTER TABLE questions ADD CONSTRAINT questions_type_check CHECK (type IN ('mcq', 'truefalse', 'short', 'multi'))");
@@ -263,6 +263,31 @@ async function init() {
     created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`);
   await pool.query('CREATE INDEX IF NOT EXISTS audit_logs_org_idx ON audit_logs (org_id, created_at DESC)');
+
+  // Support tickets raised by teachers, worked by the support team. Each ticket
+  // has a threaded conversation in ticket_messages.
+  await pool.query(`CREATE TABLE IF NOT EXISTS tickets (
+    id         SERIAL PRIMARY KEY,
+    org_id     INTEGER REFERENCES organizations(id) ON DELETE SET NULL,
+    teacher_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    subject    TEXT NOT NULL,
+    category   TEXT NOT NULL DEFAULT 'Other',
+    priority   TEXT NOT NULL DEFAULT 'normal',
+    status     TEXT NOT NULL DEFAULT 'open',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS ticket_messages (
+    id          SERIAL PRIMARY KEY,
+    ticket_id   INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+    author_id   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    author_role TEXT NOT NULL,
+    author_name TEXT NOT NULL DEFAULT '',
+    body        TEXT NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+  await pool.query('CREATE INDEX IF NOT EXISTS tickets_status_idx ON tickets (status, updated_at DESC)');
+  await pool.query('CREATE INDEX IF NOT EXISTS ticket_messages_ticket_idx ON ticket_messages (ticket_id, created_at)');
 
   // Organization-wide question bank: reusable questions any teacher in the org
   // can pull into a test. Mirrors the questions shape + topic/difficulty tags.
