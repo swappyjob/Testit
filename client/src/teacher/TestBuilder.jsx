@@ -5,21 +5,51 @@ import { BankPicker } from './QuestionBank.jsx';
 import { MathText } from '../mathText.jsx';
 import DrawingPad from './DrawingPad.jsx';
 
-// Math shortcuts for the builder toolbar. `back` = how many chars to move the
-// caret left after inserting, so it lands inside the first {…} placeholder.
-const MATH_SNIPPETS = [
-  { label: 'x²', ins: '$x^{2}$', back: 2 },
-  { label: 'xⁿ', ins: '$x^{n}$', back: 2 },
-  { label: 'x₁', ins: '$x_{1}$', back: 2 },
-  { label: '√', ins: '$\\sqrt{x}$', back: 2 },
-  { label: 'a/b', ins: '$\\frac{a}{b}$', back: 4 },
-  { label: '∫', ins: '$\\int_{a}^{b} x\\,dx$', back: 9 },
-  { label: 'Σ', ins: '$\\sum_{i=1}^{n}$', back: 2 },
-  { label: 'π', ins: '$\\pi$', back: 1 },
-  { label: 'θ', ins: '$\\theta$', back: 1 },
-  { label: '≤', ins: '$\\leq$', back: 1 },
-  { label: '≥', ins: '$\\geq$', back: 1 },
-  { label: '→', ins: '$\\rightarrow$', back: 1 },
+// Math shortcuts for the builder toolbar, grouped by category. `back` = how many
+// chars to move the caret left after inserting, so it lands inside a {…} placeholder.
+const MATH_GROUPS = [
+  { name: 'Basic', items: [
+    { label: 'x²', ins: '$x^{2}$', back: 2 },
+    { label: 'xⁿ', ins: '$x^{n}$', back: 2 },
+    { label: 'x₁', ins: '$x_{1}$', back: 2 },
+    { label: 'a/b', ins: '$\\frac{a}{b}$', back: 4 },
+    { label: '√', ins: '$\\sqrt{x}$', back: 2 },
+    { label: 'ⁿ√', ins: '$\\sqrt[n]{x}$', back: 2 },
+    { label: '±', ins: '$\\pm$', back: 1 },
+    { label: '×', ins: '$\\times$', back: 1 },
+    { label: '÷', ins: '$\\div$', back: 1 },
+    { label: '·', ins: '$\\cdot$', back: 1 },
+  ] },
+  { name: 'Calculus', items: [
+    { label: '∫', ins: '$\\int$', back: 1 },
+    { label: '∫ₐᵇ', ins: '$\\int_{a}^{b} f(x)\\,dx$', back: 1 },
+    { label: 'd/dx', ins: '$\\frac{d}{dx}$', back: 1 },
+    { label: '∂/∂x', ins: '$\\frac{\\partial}{\\partial x}$', back: 1 },
+    { label: "f′", ins: "$f'(x)$", back: 3 },
+    { label: 'lim', ins: '$\\lim_{x \\to 0}$', back: 1 },
+    { label: 'Σ', ins: '$\\sum_{i=1}^{n}$', back: 1 },
+    { label: '∏', ins: '$\\prod_{i=1}^{n}$', back: 1 },
+    { label: '∞', ins: '$\\infty$', back: 1 },
+  ] },
+  { name: 'Greek', items: [
+    { label: 'π', ins: '$\\pi$', back: 1 },
+    { label: 'θ', ins: '$\\theta$', back: 1 },
+    { label: 'α', ins: '$\\alpha$', back: 1 },
+    { label: 'β', ins: '$\\beta$', back: 1 },
+    { label: 'Δ', ins: '$\\Delta$', back: 1 },
+    { label: 'λ', ins: '$\\lambda$', back: 1 },
+    { label: 'μ', ins: '$\\mu$', back: 1 },
+    { label: 'Ω', ins: '$\\Omega$', back: 1 },
+  ] },
+  { name: 'Relations', items: [
+    { label: '≤', ins: '$\\leq$', back: 1 },
+    { label: '≥', ins: '$\\geq$', back: 1 },
+    { label: '≠', ins: '$\\neq$', back: 1 },
+    { label: '≈', ins: '$\\approx$', back: 1 },
+    { label: '→', ins: '$\\rightarrow$', back: 1 },
+    { label: '⇒', ins: '$\\Rightarrow$', back: 1 },
+    { label: '°', ins: '$^{\\circ}$', back: 1 },
+  ] },
 ];
 
 const TYPE_LABEL = { mcq: 'Single choice', multi: 'Multiple answers', truefalse: 'True / False', short: 'Short answer' };
@@ -324,12 +354,16 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
 
           <label>Question text</label>
           <textarea ref={promptRef} value={q.prompt} onChange={(e) => updateQ(qIndex, { prompt: e.target.value })} placeholder="Type the question... Wrap math in $…$, e.g. Solve $\int x^2\,dx$" />
-          <div className="row" style={{ gap: 4, flexWrap: 'wrap', marginTop: 6, alignItems: 'center' }}>
-            <span className="muted" style={{ fontSize: 12, marginRight: 2 }}>∑ Math:</span>
-            {MATH_SNIPPETS.map((m) => (
-              <button key={m.label} type="button" className="btn ghost small" title={m.ins} style={{ padding: '2px 8px', minWidth: 0 }} onClick={() => insertMath(m.ins, m.back)}>{m.label}</button>
+          <div style={{ marginTop: 6 }}>
+            {MATH_GROUPS.map((g) => (
+              <div className="row" key={g.name} style={{ gap: 4, flexWrap: 'wrap', alignItems: 'center', marginBottom: 4 }}>
+                <span className="muted" style={{ fontSize: 12, width: 66, flexShrink: 0 }}>{g.name}</span>
+                {g.items.map((m) => (
+                  <button key={m.label} type="button" className="btn ghost small" title={m.ins} style={{ padding: '2px 8px', minWidth: 0 }} onClick={() => insertMath(m.ins, m.back)}>{m.label}</button>
+                ))}
+              </div>
             ))}
-            <span className="muted" style={{ fontSize: 12 }}>— or type <code>$…$</code> yourself</span>
+            <span className="muted" style={{ fontSize: 12 }}>Tip: you can also type any LaTeX between <code>$…$</code> — e.g. <code>$\int_a^b x\,dx$</code>.</span>
           </div>
 
           <label>Diagram (optional)</label>
