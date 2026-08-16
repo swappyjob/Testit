@@ -4,53 +4,7 @@ import { Msg, DateTime12 } from '../components.jsx';
 import { BankPicker } from './QuestionBank.jsx';
 import { MathText } from '../mathText.jsx';
 import DrawingPad from './DrawingPad.jsx';
-
-// Math shortcuts for the builder toolbar, grouped by category. `back` = how many
-// chars to move the caret left after inserting, so it lands inside a {…} placeholder.
-const MATH_GROUPS = [
-  { name: 'Basic', items: [
-    { label: 'x²', ins: '$x^{2}$', back: 2 },
-    { label: 'xⁿ', ins: '$x^{n}$', back: 2 },
-    { label: 'x₁', ins: '$x_{1}$', back: 2 },
-    { label: 'a/b', ins: '$\\frac{a}{b}$', back: 4 },
-    { label: '√', ins: '$\\sqrt{x}$', back: 2 },
-    { label: 'ⁿ√', ins: '$\\sqrt[n]{x}$', back: 2 },
-    { label: '±', ins: '$\\pm$', back: 1 },
-    { label: '×', ins: '$\\times$', back: 1 },
-    { label: '÷', ins: '$\\div$', back: 1 },
-    { label: '·', ins: '$\\cdot$', back: 1 },
-  ] },
-  { name: 'Calculus', items: [
-    { label: '∫', ins: '$\\int$', back: 1 },
-    { label: '∫ₐᵇ', ins: '$\\int_{a}^{b} f(x)\\,dx$', back: 1 },
-    { label: 'd/dx', ins: '$\\frac{d}{dx}$', back: 1 },
-    { label: '∂/∂x', ins: '$\\frac{\\partial}{\\partial x}$', back: 1 },
-    { label: "f′", ins: "$f'(x)$", back: 3 },
-    { label: 'lim', ins: '$\\lim_{x \\to 0}$', back: 1 },
-    { label: 'Σ', ins: '$\\sum_{i=1}^{n}$', back: 1 },
-    { label: '∏', ins: '$\\prod_{i=1}^{n}$', back: 1 },
-    { label: '∞', ins: '$\\infty$', back: 1 },
-  ] },
-  { name: 'Greek', items: [
-    { label: 'π', ins: '$\\pi$', back: 1 },
-    { label: 'θ', ins: '$\\theta$', back: 1 },
-    { label: 'α', ins: '$\\alpha$', back: 1 },
-    { label: 'β', ins: '$\\beta$', back: 1 },
-    { label: 'Δ', ins: '$\\Delta$', back: 1 },
-    { label: 'λ', ins: '$\\lambda$', back: 1 },
-    { label: 'μ', ins: '$\\mu$', back: 1 },
-    { label: 'Ω', ins: '$\\Omega$', back: 1 },
-  ] },
-  { name: 'Relations', items: [
-    { label: '≤', ins: '$\\leq$', back: 1 },
-    { label: '≥', ins: '$\\geq$', back: 1 },
-    { label: '≠', ins: '$\\neq$', back: 1 },
-    { label: '≈', ins: '$\\approx$', back: 1 },
-    { label: '→', ins: '$\\rightarrow$', back: 1 },
-    { label: '⇒', ins: '$\\Rightarrow$', back: 1 },
-    { label: '°', ins: '$^{\\circ}$', back: 1 },
-  ] },
-];
+import RichMathInput from './RichMathInput.jsx';
 
 const TYPE_LABEL = { mcq: 'Single choice', multi: 'Multiple answers', truefalse: 'True / False', short: 'Short answer' };
 const parseCorrectSet = (raw) => { try { const a = JSON.parse(raw); return Array.isArray(a) ? a.map(Number) : []; } catch { return []; } };
@@ -91,7 +45,6 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
   const [showDraw, setShowDraw] = useState(false);
   const savingRef = useRef(false);
   const lastSnapRef = useRef(null);
-  const promptRef = useRef(null);
 
   const isDraftMode = !editId; // editing a live test does not auto-save drafts
 
@@ -213,19 +166,6 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
       updateQ(qIndex, { image: url });
     } catch (e) { alert(e.message); }
   }
-  // Insert a LaTeX snippet into the prompt at the cursor, then place the caret
-  // inside its first placeholder so the teacher can type right away.
-  function insertMath(snippet, back = 0) {
-    const ta = promptRef.current;
-    const cur = questions[qIndex].prompt || '';
-    const s = ta ? ta.selectionStart : cur.length;
-    const e = ta ? ta.selectionEnd : cur.length;
-    const next = cur.slice(0, s) + snippet + cur.slice(e);
-    updateQ(qIndex, { prompt: next });
-    const caret = s + snippet.length - back;
-    requestAnimationFrame(() => { if (ta) { ta.focus(); ta.setSelectionRange(caret, caret); } });
-  }
-
   function cleanQuestions() {
     return questions.map((q) => {
       if (q.type === 'multi') {
@@ -355,18 +295,8 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
           </select>
 
           <label>Question text</label>
-          <textarea ref={promptRef} value={q.prompt} onChange={(e) => updateQ(qIndex, { prompt: e.target.value })} placeholder="Type the question... Wrap math in $…$, e.g. Solve $\int x^2\,dx$" />
-          <div style={{ marginTop: 6 }}>
-            {MATH_GROUPS.map((g) => (
-              <div className="row" key={g.name} style={{ gap: 4, flexWrap: 'wrap', alignItems: 'center', marginBottom: 4 }}>
-                <span className="muted" style={{ fontSize: 12, width: 66, flexShrink: 0 }}>{g.name}</span>
-                {g.items.map((m) => (
-                  <button key={m.label} type="button" className="btn ghost small" title={m.ins} style={{ padding: '2px 8px', minWidth: 0 }} onClick={() => insertMath(m.ins, m.back)}>{m.label}</button>
-                ))}
-              </div>
-            ))}
-            <span className="muted" style={{ fontSize: 12 }}>Tip: you can also type any LaTeX between <code>$…$</code> — e.g. <code>$\int_a^b x\,dx$</code>.</span>
-          </div>
+          <RichMathInput value={q.prompt} onChange={(v) => updateQ(qIndex, { prompt: v })}
+            placeholder="Type the question. For any maths, click ➕ Insert equation." />
 
           <label>Diagram (optional)</label>
           {q.image ? (
@@ -397,7 +327,7 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
               {q.options.map((opt, oi) => (
                 <div className="row" key={oi} style={{ marginBottom: 6 }}>
                   <input type="radio" name={'correct-' + qIndex} checked={Number(q.correct) === oi} onChange={() => updateQ(qIndex, { correct: oi })} style={{ width: 'auto' }} />
-                  <input type="text" value={opt} onChange={(e) => setOption(qIndex, oi, e.target.value)} placeholder={'Choice ' + (oi + 1)} style={{ flex: 1 }} />
+                  <div style={{ flex: 1 }}><RichMathInput value={opt} onChange={(v) => setOption(qIndex, oi, v)} placeholder={'Choice ' + (oi + 1)} oneLine /></div>
                 </div>
               ))}
               <button className="btn ghost small" style={{ marginTop: 6 }} onClick={() => addOption(qIndex)}>+ Add choice</button>
@@ -415,7 +345,7 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
                       cur.has(oi) ? cur.delete(oi) : cur.add(oi);
                       updateQ(qIndex, { correct: [...cur].sort((a, b) => a - b) });
                     }} style={{ width: 'auto' }} />
-                    <input type="text" value={opt} onChange={(e) => setOption(qIndex, oi, e.target.value)} placeholder={'Choice ' + (oi + 1)} style={{ flex: 1 }} />
+                    <div style={{ flex: 1 }}><RichMathInput value={opt} onChange={(v) => setOption(qIndex, oi, v)} placeholder={'Choice ' + (oi + 1)} oneLine /></div>
                   </div>
                 );
               })}
@@ -437,7 +367,8 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
           <input type="number" min="1" value={q.points} onChange={(e) => updateQ(qIndex, { points: Number(e.target.value) || 1 })} style={{ width: 100 }} />
 
           <label>Explanation for the correct answer (optional)</label>
-          <textarea value={q.explanation} onChange={(e) => updateQ(qIndex, { explanation: e.target.value })} placeholder="Shown to students when they review the test." />
+          <RichMathInput value={q.explanation} onChange={(v) => updateQ(qIndex, { explanation: v })}
+            placeholder="Shown to students when they review the test." />
 
           <div className="row" style={{ marginTop: 10, alignItems: 'center', gap: 10 }}>
             <button className="btn ghost small" type="button" onClick={() => saveToBank(qIndex)}>💾 Save this question to the bank</button>
