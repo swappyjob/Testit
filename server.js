@@ -400,6 +400,43 @@ app.post('/api/students', requireAuth('teacher'), requireActiveSubscription, h(a
   res.json({ token, signupPath: `/signup?token=${token}` });
 }));
 
+// Bulk-add students from a parsed CSV: creates an invite per valid row, enforces
+// the plan cap, and reports what was created vs. skipped (with reasons).
+app.post('/api/students/bulk', requireAuth('teacher'), requireActiveSubscription, h(async (req, res) => {
+  const rows = Array.isArray(req.body.students) ? req.body.students : [];
+  if (rows.length === 0) return res.status(400).json({ error: 'No students found in the file.' });
+  if (rows.length > 1000) return res.status(400).json({ error: 'Please import at most 1000 students at a time.' });
+
+  const plan = await get('SELECT p.max_students FROM organizations o LEFT JOIN plans p ON p.id = o.plan_id WHERE o.id = ?', [req.user.org_id]);
+  const cap = plan && plan.max_students != null ? plan.max_students : null;
+  let used = (await get("SELECT COUNT(*) AS c FROM signup_tokens WHERE invite_role = 'student' AND org_id = ?", [req.user.org_id])).c;
+
+  const created = [], skipped = [];
+  const seen = new Set();
+  for (let i = 0; i < rows.length; i++) {
+    const name = (rows[i].name || '').trim();
+    const email = (rows[i].email || '').trim().toLowerCase();
+    const phone = (rows[i].phone || '').trim();
+    const accessUntil = readAccessUntil(rows[i]);
+    const label = name || email || `Row ${i + 1}`;
+    if (!name || !email) { skipped.push({ label, reason: 'Name and email are required' }); continue; }
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { skipped.push({ label, reason: 'Invalid email address' }); continue; }
+    if (!phone || !/^[\d+()\-\s]{6,20}$/.test(phone)) { skipped.push({ label, reason: 'Missing or invalid phone number' }); continue; }
+    if (seen.has(email)) { skipped.push({ label, reason: 'Duplicate row in the file' }); continue; }
+    if (cap != null && used >= cap) { skipped.push({ label, reason: `Plan limit reached (${cap} students)` }); continue; }
+    if (await get("SELECT id FROM users WHERE email = ? AND role IN ('teacher','admin')", [email])) { skipped.push({ label, reason: 'Email belongs to a teacher/admin account' }); continue; }
+    if (await get("SELECT id FROM signup_tokens WHERE email = ? AND org_id = ? AND invite_role = 'student'", [email, req.user.org_id])) { skipped.push({ label, reason: 'Already in your organization' }); continue; }
+    const token = randomToken();
+    await run('INSERT INTO signup_tokens (token, name, email, phone, access_until, org_id, teacher_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [token, name, email, phone, accessUntil, req.user.org_id, req.user.id]);
+    seen.add(email);
+    used += 1;
+    created.push({ name, email, signupPath: `/signup?token=${token}` });
+  }
+  if (created.length) await logAudit(req, { action: 'student.create', entityType: 'student', entityLabel: `${created.length} students`, details: `Bulk import (${created.length} added, ${skipped.length} skipped)` });
+  res.json({ created, skipped });
+}));
+
 // List this teacher's students + pending invites.
 app.get('/api/students', requireAuth('teacher'), h(async (req, res) => {
   const q = (req.query.q || '').trim();

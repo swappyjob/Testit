@@ -9,6 +9,7 @@ export default function StudentsTab({ readOnly }) {
   const [msg, setMsg] = useState(null); // { text, ok }
   const [selectedId, setSelectedId] = useState(null); // signup-invite id (s.id)
   const [showAdd, setShowAdd] = useState(false);
+  const [showImport, setShowImport] = useState(false);
   const timer = useRef(null);
 
   const load = (q = query) => api('/api/students' + (q ? '?q=' + encodeURIComponent(q) : '')).then((d) => setStudents(d.students));
@@ -57,6 +58,7 @@ export default function StudentsTab({ readOnly }) {
           <h2 style={{ margin: 0 }}>Students in your organization</h2>
           <div className="row">
             {!readOnly && <button className="btn small" onClick={() => setShowAdd((v) => !v)}>{showAdd ? 'Close' : '➕ Create student'}</button>}
+            {!readOnly && <button className="btn secondary small" onClick={() => setShowImport(true)}>⬆ Import CSV</button>}
             <a className="btn secondary small" href="/api/students/export.csv" download>⬇ Download CSV</a>
           </div>
         </div>
@@ -80,7 +82,102 @@ export default function StudentsTab({ readOnly }) {
           </table>
         )}
       </div>
+
+      {showImport && <BulkImport onClose={() => setShowImport(false)} onDone={() => { setShowImport(false); setQuery(''); load(''); }} />}
     </>
+  );
+}
+
+// --- Bulk CSV import -------------------------------------------------------
+const csvEsc = (v) => { const s = v == null ? '' : String(v); return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+const TEMPLATE = 'data:text/csv;charset=utf-8,' + encodeURIComponent('Name,Email,Phone,Access Until\nAarav Sharma,aarav@example.com,9000000001,\nDiya Patel,diya@example.com,9000000002,2026-12-31\n');
+
+// Minimal CSV parser that respects quoted fields.
+function parseCSV(text) {
+  return String(text).split(/\r?\n/).filter((l) => l.trim() !== '').map((line) => {
+    const cells = []; let cur = '', q = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (q) { if (ch === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else q = false; } else cur += ch; }
+      else if (ch === '"') q = true;
+      else if (ch === ',') { cells.push(cur); cur = ''; }
+      else cur += ch;
+    }
+    cells.push(cur);
+    return cells.map((c) => c.trim());
+  });
+}
+
+function BulkImport({ onClose, onDone }) {
+  const [rows, setRows] = useState(null);
+  const [fileName, setFileName] = useState('');
+  const [result, setResult] = useState(null);
+  const [msg, setMsg] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  function onFile(file) {
+    if (!file) return;
+    setFileName(file.name); setMsg(''); setResult(null);
+    const reader = new FileReader();
+    reader.onload = () => {
+      let grid = parseCSV(reader.result);
+      if (grid.length && grid[0].join(',').toLowerCase().includes('email')) grid = grid.slice(1); // drop header
+      const parsed = grid
+        .map((c) => ({ name: c[0] || '', email: c[1] || '', phone: c[2] || '', accessUntil: c[3] || '' }))
+        .filter((r) => r.name || r.email || r.phone);
+      if (!parsed.length) setMsg('No rows found. Expected columns: Name, Email, Phone, Access until.');
+      setRows(parsed);
+    };
+    reader.onerror = () => setMsg('Could not read the file.');
+    reader.readAsText(file);
+  }
+
+  async function submit() {
+    if (!rows || !rows.length) return;
+    setBusy(true); setMsg('');
+    try { setResult(await api('/api/students/bulk', 'POST', { students: rows })); }
+    catch (e) { setMsg(e.message); }
+    finally { setBusy(false); }
+  }
+
+  function downloadLinks() {
+    const origin = window.location.origin;
+    const lines = ['Name,Email,Signup Link', ...result.created.map((c) => [c.name, c.email, origin + c.signupPath].map(csvEsc).join(','))];
+    const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = 'student-signup-links.csv'; a.click();
+  }
+
+  return (
+    <Modal title="Import students from CSV" onClose={onClose} wide>
+      {!result ? (
+        <>
+          <p className="muted">Upload a CSV with columns <b>Name, Email, Phone, Access until</b> (the last is optional; a header row is fine).</p>
+          <p><a href={TEMPLATE} download="students-template.csv">⬇ Download a template</a></p>
+          <input type="file" accept=".csv,text/csv" onChange={(e) => onFile(e.target.files[0])} />
+          {rows && <p className="muted" style={{ marginTop: 8 }}>{fileName}: <b>{rows.length}</b> row(s) ready to import.</p>}
+          {msg && <Msg text={msg} />}
+          <div className="row" style={{ marginTop: 16 }}>
+            <button className="btn" disabled={!rows || !rows.length || busy} onClick={submit}>{busy ? 'Importing…' : `Import ${rows && rows.length ? rows.length : ''} student(s)`}</button>
+            <button className="btn ghost" onClick={onClose}>Cancel</button>
+          </div>
+        </>
+      ) : (
+        <>
+          <Msg text={`✅ ${result.created.length} student(s) added${result.skipped.length ? `, ${result.skipped.length} skipped.` : '.'}`} kind="ok" />
+          {result.created.length > 0 && (
+            <p><button className="btn secondary small" onClick={downloadLinks}>⬇ Download signup links (CSV)</button> <span className="muted">— send each student their link.</span></p>
+          )}
+          {result.skipped.length > 0 && (
+            <table style={{ marginTop: 10 }}>
+              <thead><tr><th>Row</th><th>Skipped because</th></tr></thead>
+              <tbody>{result.skipped.map((s, i) => <tr key={i}><td>{s.label}</td><td className="muted">{s.reason}</td></tr>)}</tbody>
+            </table>
+          )}
+          <div className="row" style={{ marginTop: 16 }}><button className="btn" onClick={onDone}>Done</button></div>
+        </>
+      )}
+    </Modal>
   );
 }
 
