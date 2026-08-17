@@ -92,6 +92,8 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
 
   // ---- Auto-save (new/draft only), debounced, only after a real change ----
   const snapshot = JSON.stringify({ title, description, dueDate, durationMinutes, negativeMarking, penalty, proctored, maxViolations, defaultPoints, sections, questions, page });
+  // Content only (no page) — used to dismiss the edit-mode "Saved" tick on real edits, not on navigation.
+  const contentSnap = JSON.stringify({ title, description, dueDate, durationMinutes, negativeMarking, penalty, proctored, maxViolations, sections, questions });
   async function saveDraft() {
     if (savingRef.current) return;
     savingRef.current = true;
@@ -111,6 +113,9 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [snapshot, ready]);
+
+  // In edit mode, dismiss the "✓ Saved" tick as soon as the teacher changes something.
+  useEffect(() => { if (editId) setSavedAt(null); /* eslint-disable-next-line */ }, [contentSnap]);
 
   // ---- Helpers ----
   const updateQ = (i, patch) => setQuestions((qs) => qs.map((q, idx) => (idx === i ? { ...q, ...patch } : q)));
@@ -181,21 +186,36 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
       return q;
     });
   }
-  async function publish() {
-    setMsg('');
-    const payload = {
+  function buildPayload() {
+    return {
       title, description, dueDate,
       durationMinutes: Number(durationMinutes) || 0,
       negativeMarking, penalty,
       proctored, maxViolations: Number(maxViolations) || 3,
       questions: cleanQuestions(),
     };
+  }
+  async function publish() {
+    setMsg('');
     try {
-      if (editId) await api('/api/tests/' + editId, 'PUT', payload);
-      else await api('/api/tests', 'POST', payload);
+      if (editId) await api('/api/tests/' + editId, 'PUT', buildPayload());
+      else await api('/api/tests', 'POST', buildPayload());
       if (draftId) { try { await api('/api/drafts/' + draftId, 'DELETE'); } catch { /* ignore */ } }
       onSaved();
     } catch (e) { setMsg(e.message); }
+  }
+  // Save the edits to the server without leaving the wizard (edit mode only).
+  async function saveEdit() {
+    setMsg('');
+    try { await api('/api/tests/' + editId, 'PUT', buildPayload()); setSavedAt(Date.now()); }
+    catch (e) { setMsg(e.message); }
+  }
+  // Auto-save on Next (edit mode). Silent on validation errors so navigation stays
+  // smooth while a question is still being filled in; the explicit Save surfaces them.
+  async function autoSaveOnNext() {
+    if (!editId) return;
+    try { await api('/api/tests/' + editId, 'PUT', buildPayload()); setSavedAt(Date.now()); }
+    catch { /* ignore — an incomplete question just won't save until it's valid */ }
   }
 
   // ---- Render ----
@@ -210,6 +230,12 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
       <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
         <h1 style={{ margin: 0 }}>{editId ? 'Edit test' : 'Create a test'}</h1>
         {isDraftMode && <span className="pill gray">{draftId ? (savedAt ? '✓ Draft saved' : 'Saving…') : 'Auto-saves as you go'}</span>}
+        {editId && (
+          <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+            {savedAt && <span className="pill green">✓ Saved</span>}
+            <button className="btn small" type="button" onClick={saveEdit}>💾 Save</button>
+          </div>
+        )}
       </div>
       <p className="muted" style={{ marginTop: 6 }}>
         {onHeader ? 'Step 1 — Test details (applies to the whole test)' : onReview ? `Review — ${total} question(s)` : `Question ${page} of ${total}`}
@@ -426,7 +452,7 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
           {(q || onReview) && <button className="btn secondary" type="button" onClick={addQuestion}>+ Add question</button>}
           {onReview
             ? <button className="btn" type="button" onClick={publish}>{editId ? 'Save changes' : 'Publish test'}</button>
-            : <button className="btn" type="button" onClick={() => setPage((p) => Math.min(total + 1, p + 1))}>{page === total ? 'Review →' : 'Next →'}</button>}
+            : <button className="btn" type="button" onClick={() => { autoSaveOnNext(); setPage((p) => Math.min(total + 1, p + 1)); }}>{page === total ? 'Review →' : 'Next →'}</button>}
         </div>
       </div>
 
