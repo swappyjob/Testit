@@ -3,7 +3,6 @@ import ReactDOM from 'react-dom/client';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import './styles.css';
 
-import Landing from './pages/Landing.jsx';
 import Login from './pages/Login.jsx';
 import Signup from './pages/Signup.jsx';
 import ForgotPassword from './pages/ForgotPassword.jsx';
@@ -33,12 +32,18 @@ const supportLogin = {
   role: 'support', title: 'Support login', subtitle: 'Support-team sign-in.',
   footer: <a href="/forgot-password">Forgot password?</a>,
 };
+// The homepage is one clean login for everyone — the server detects the role
+// (teacher / student / admin / support) and routes to the right dashboard.
+const homeLogin = {
+  title: 'Log in', subtitle: 'Sign in to your account.',
+  footer: <a href="/forgot-password">Forgot password?</a>,
+};
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <BrowserRouter>
       <Routes>
-        <Route path="/" element={<Landing />} />
+        <Route path="/" element={<Login {...homeLogin} />} />
         <Route path="/teacher-login" element={<Login {...teacherLogin} />} />
         <Route path="/student-login" element={<Login {...studentLogin} />} />
         <Route path="/admin-login" element={<Login {...adminLogin} />} />
@@ -52,7 +57,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
         <Route path="/teacher" element={<TeacherDashboard />} />
         <Route path="/admin" element={<AdminDashboard />} />
         <Route path="/support" element={<SupportDashboard />} />
-        <Route path="*" element={<Landing />} />
+        <Route path="*" element={<Login {...homeLogin} />} />
       </Routes>
     </BrowserRouter>
   </React.StrictMode>
