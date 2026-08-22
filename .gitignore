@@ -9,3 +9,4 @@ public/uploads/
 gcp-env.yaml
 *.sql
 *.log
+design/
