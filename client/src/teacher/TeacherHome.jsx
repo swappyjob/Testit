@@ -45,7 +45,7 @@ export default function TeacherHome({ me, onCreate, onNavigate, readOnly }) {
   ];
   const actions = [
     { label: 'Create a test', sub: 'Build questions with math & diagrams', bg: '#eef2ff', fg: '#4f46e5', icon: <path d="M12 5v14M5 12h14" />, onClick: () => !readOnly && onCreate() },
-    { label: 'Import students', sub: 'Add a whole batch from a CSV', bg: '#dcfce7', fg: '#16a34a', icon: <path d="M12 3v12M8 11l4 4 4-4M4 21h16" />, onClick: () => onNavigate('students') },
+    { label: 'Add students', sub: 'Invite students to your organization', bg: '#dcfce7', fg: '#16a34a', icon: <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM19 8v6M22 11h-6" />, onClick: () => onNavigate('students') },
     { label: 'Question bank', sub: 'Reuse questions across tests', bg: '#fef3c7', fg: '#d97706', icon: <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5z" />, onClick: () => onNavigate('bank') },
   ];
 
