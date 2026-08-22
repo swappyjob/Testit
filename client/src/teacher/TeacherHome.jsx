@@ -41,7 +41,6 @@ export default function TeacherHome({ me, onCreate, onNavigate, readOnly }) {
     { key: 'students', label: 'Students', value: s?.students ?? '—', to: 'students', bg: '#dcfce7', fg: '#16a34a', icon: <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z" /> },
     { key: 'tests', label: 'Tests', value: s?.tests ?? '—', to: 'tests', bg: '#eef2ff', fg: '#4f46e5', icon: <path d="M9 12h6M9 16h6M9 8h6M6 3h9l4 4v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" /> },
     { key: 'teachers', label: 'Teachers', value: s?.teachers ?? '—', to: 'teachers', bg: '#fef3c7', fg: '#d97706', icon: <path d="M22 10v6M2 10l10-5 10 5-10 5z M6 12v5c3 3 9 3 12 0v-5" /> },
-    { key: 'pending', label: 'Awaiting grading', value: s?.pendingGrading ?? '—', to: 'tests', bg: '#fee2e2', fg: '#dc2626', icon: <path d="M12 8v4l3 2M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z" /> },
   ];
   const actions = [
     { label: 'Create a test', sub: 'Build questions with math & diagrams', bg: '#eef2ff', fg: '#4f46e5', icon: <path d="M12 5v14M5 12h14" />, onClick: () => !readOnly && onCreate() },
@@ -60,7 +59,7 @@ export default function TeacherHome({ me, onCreate, onNavigate, readOnly }) {
       </div>
 
       {/* metric tiles */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0,1fr))', gap: 14, marginTop: 16 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${tiles.length}, minmax(0,1fr))`, gap: 14, marginTop: 16 }}>
         {tiles.map((t) => (
           <div key={t.key} className="card" role="button" tabIndex={0} onClick={() => onNavigate(t.to)}
             onKeyDown={(e) => { if (e.key === 'Enter') onNavigate(t.to); }}
