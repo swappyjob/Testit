@@ -10,6 +10,13 @@ function greeting() {
   const h = new Date().getHours();
   return h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening';
 }
+// First name, but keep a leading honorific with it ("Dr. Anjali Verma" → "Dr. Anjali").
+const TITLES = new Set(['dr', 'dr.', 'mr', 'mr.', 'mrs', 'mrs.', 'ms', 'ms.', 'prof', 'prof.', 'mx', 'mx.']);
+function displayName(full) {
+  const parts = String(full || '').trim().split(/\s+/);
+  if (parts.length > 1 && TITLES.has(parts[0].toLowerCase())) return parts[0] + ' ' + parts[1];
+  return parts[0] || '';
+}
 function ago(s) {
   const d = new Date(s); if (isNaN(d)) return '';
   const m = Math.round((Date.now() - d.getTime()) / 60000);
@@ -46,7 +53,7 @@ export default function TeacherHome({ me, onCreate, onNavigate, readOnly }) {
     <>
       <div className="card" style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
         <div>
-          <h1 style={{ margin: 0 }}>{greeting()}, {me.name.split(' ')[0]}</h1>
+          <h1 style={{ margin: 0 }}>{greeting()}, {displayName(me.name)}</h1>
           <p className="muted" style={{ margin: '6px 0 0' }}>Here's what's happening{me.orgName ? ` at ${me.orgName}` : ''}.</p>
         </div>
         {!readOnly && <button className="btn" onClick={onCreate}>+ Create test</button>}
