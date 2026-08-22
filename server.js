@@ -1355,6 +1355,37 @@ app.get('/api/tests', requireAuth('teacher'), h(async (req, res) => {
   res.json({ tests });
 }));
 
+// At-a-glance numbers + recent tests for the teacher "Home" overview.
+app.get('/api/teacher/summary', requireAuth('teacher'), h(async (req, res) => {
+  const orgId = req.user.org_id;
+  const tests = (await get('SELECT COUNT(*) AS c FROM tests WHERE teacher_id = ?', [req.user.id])).c;
+  const students = (await get("SELECT COUNT(*) AS c FROM signup_tokens WHERE invite_role = 'student' AND org_id = ?", [orgId])).c;
+  const teachers = (await get("SELECT COUNT(*) AS c FROM users WHERE role = 'teacher' AND org_id = ?", [orgId])).c;
+  const agg = await get(
+    `SELECT COUNT(*) FILTER (WHERE at.submitted_at IS NOT NULL) AS submissions,
+            COUNT(*) FILTER (WHERE at.submitted_at IS NOT NULL AND at.needs_grading = 1) AS pending,
+            AVG(CASE WHEN at.submitted_at IS NOT NULL AND at.needs_grading = 0 AND at.max_score > 0
+                     THEN (at.auto_score + at.manual_score)::float / at.max_score END) AS avg_ratio
+       FROM attempts at JOIN tests t ON t.id = at.test_id
+      WHERE t.teacher_id = ?`,
+    [req.user.id]
+  );
+  const recent = await all(
+    `SELECT t.id, t.title, t.due_date,
+            (SELECT COUNT(*) FROM attempts a WHERE a.test_id = t.id AND a.submitted_at IS NOT NULL) AS submitted,
+            (SELECT COUNT(*) FROM assignments a WHERE a.test_id = t.id) AS assigned
+       FROM tests t WHERE t.teacher_id = ? ORDER BY t.created_at DESC LIMIT 5`,
+    [req.user.id]
+  );
+  res.json({
+    tests, students, teachers,
+    submissions: Number(agg.submissions) || 0,
+    pendingGrading: Number(agg.pending) || 0,
+    avgScorePct: agg.avg_ratio != null ? Math.round(Number(agg.avg_ratio) * 100) : null,
+    recentTests: recent.map((r) => ({ id: r.id, title: r.title, submitted: r.submitted, assigned: r.assigned, closed: isClosed(r.due_date) })),
+  });
+}));
+
 app.get('/api/tests/:id', requireAuth('teacher'), h(async (req, res) => {
   const test = await get('SELECT * FROM tests WHERE id = ? AND teacher_id = ?', [req.params.id, req.user.id]);
   if (!test) return res.status(404).json({ error: 'Test not found.' });

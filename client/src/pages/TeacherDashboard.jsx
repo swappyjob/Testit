@@ -10,10 +10,11 @@ import SubscriptionTab from '../teacher/SubscriptionTab.jsx';
 import QuestionBank from '../teacher/QuestionBank.jsx';
 import AuditLogs from '../teacher/AuditLogs.jsx';
 import SupportTickets from '../teacher/SupportTickets.jsx';
+import TeacherHome from '../teacher/TeacherHome.jsx';
 
 export default function TeacherDashboard() {
   const me = useRequireRole('teacher', '/teacher-login');
-  const [tab, setTab] = useState('tests');
+  const [tab, setTab] = useState('home');
   const [editTestId, setEditTestId] = useState(null);
   const [draftId, setDraftId] = useState(null);
   const [showProfile, setShowProfile] = useState(false);
@@ -81,8 +82,9 @@ export default function TeacherDashboard() {
             </span>
           </div>
         )}
-        {tab !== 'create' && <StatsBar onNavigate={setTab} />}
+        {tab !== 'create' && tab !== 'home' && <StatsBar onNavigate={setTab} />}
         <div className="tabs">
+          <Tab id="home" label="Home" icon="🏠" />
           <Tab id="tests" label="My Tests" icon="📋" />
           <Tab id="students" label="Students" icon="👥" />
           <Tab id="teachers" label="Teachers" icon="🧑‍🏫" />
@@ -90,6 +92,7 @@ export default function TeacherDashboard() {
           <Tab id="audit" label="Audit Logs" icon="📜" />
           <Tab id="support" label="Support" icon="🎫" />
         </div>
+        {tab === 'home' && <TeacherHome me={me} onCreate={openCreate} onNavigate={setTab} readOnly={readOnly} />}
         {tab === 'tests' && <MyTests onEdit={openEdit} onResumeDraft={openDraft} onCreate={openCreate} readOnly={readOnly} />}
         {tab === 'create' && !readOnly && <TestBuilder key={editTestId ? 'e' + editTestId : draftId ? 'd' + draftId : 'new'} editId={editTestId} draftId={draftId} onSaved={afterSave} onCancel={cancelBuild} />}
         {tab === 'students' && <StudentsTab readOnly={readOnly} />}

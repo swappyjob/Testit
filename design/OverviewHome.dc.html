@@ -1,0 +1,78 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    :root{ --bg:#eef1f8; --ink:#1f2937; --muted:#6b7280; --line:#e6e8ef; --brand:#4f46e5; --brand2:#6366f1; --brandDark:#4338ca; }
+    *{ box-sizing:border-box; }
+    body{ margin:0; font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; color:var(--ink);
+      background:radial-gradient(1200px 600px at 100% -10%, #e7e9ff 0%, rgba(231,233,255,0) 60%), var(--bg); }
+    a{ color:var(--brand); } a:hover{ color:var(--brandDark); }
+    .card{ background:#fff; border:1px solid var(--line); border-radius:14px; box-shadow:0 1px 2px rgba(16,24,40,.04), 0 10px 26px rgba(16,24,40,.05); }
+    .btn{ background:linear-gradient(135deg,var(--brand),var(--brand2)); color:#fff; border:none; border-radius:9px; padding:9px 16px; font-weight:700; font-size:14px; box-shadow:0 6px 16px rgba(79,70,229,.25); }
+    .btn.gh{ background:#fff; color:var(--muted); border:1px solid var(--line); box-shadow:none; font-weight:600; font-size:13px; padding:7px 13px; }
+    .qa{ display:flex; align-items:center; gap:14px; padding:18px; border-radius:12px; cursor:pointer; }
+    .muted{ color:var(--muted); }
+    .dot{ width:34px; height:34px; border-radius:10px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+  </style>
+</helmet>
+<div style="width:1240px; min-height:860px; padding:0 0 40px;">
+  <div style="display:flex; align-items:center; justify-content:space-between; padding:14px 32px; background:rgba(255,255,255,.85); border-bottom:1px solid var(--line);">
+    <div style="display:flex; align-items:center; gap:22px;">
+      <div style="font-weight:800; font-size:19px; letter-spacing:-.02em;"><span style="color:var(--brand);">Test</span>Platform</div>
+      <div style="display:flex; gap:18px; color:var(--muted); font-weight:600; font-size:14px;"><span style="color:var(--brand);">Home</span><span>Tests</span><span>Students</span><span>Teachers</span><span>More</span></div>
+    </div>
+    <div style="display:flex; align-items:center; gap:12px;">
+      <div style="width:38px; height:38px; border-radius:999px; background:linear-gradient(135deg,var(--brand),var(--brand2)); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:700;">AV</div>
+      <button class="btn gh">Log out</button>
+    </div>
+  </div>
+
+  <div style="padding:28px 32px 0;">
+    <div style="display:flex; align-items:flex-end; justify-content:space-between;">
+      <div><div style="font-size:26px; font-weight:800;">Good afternoon, Dr. Verma</div><div class="muted" style="font-size:14px; margin-top:4px;">Here's what's happening at Bright Future NEET Academy.</div></div>
+      <button class="btn">+ Create test</button>
+    </div>
+
+    <!-- metric tiles -->
+    <div style="display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:16px; margin-top:22px;">
+      <div class="card" style="padding:18px;"><div class="muted" style="font-size:13px;">Students</div><div style="font-size:26px; font-weight:800; margin-top:4px;">11</div></div>
+      <div class="card" style="padding:18px;"><div class="muted" style="font-size:13px;">Tests</div><div style="font-size:26px; font-weight:800; margin-top:4px;">2</div></div>
+      <div class="card" style="padding:18px;"><div class="muted" style="font-size:13px;">Avg. score</div><div style="font-size:26px; font-weight:800; margin-top:4px;">72%</div></div>
+      <div class="card" style="padding:18px;"><div class="muted" style="font-size:13px;">Awaiting grading</div><div style="font-size:26px; font-weight:800; margin-top:4px; color:#d97706;">3</div></div>
+    </div>
+
+    <!-- quick actions -->
+    <div style="display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:16px; margin-top:16px;">
+      <div class="card qa"><div class="dot" style="background:#eef2ff; color:var(--brand);"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg></div><div><div style="font-weight:700;">Create a test</div><div class="muted" style="font-size:12px;">Build questions with math &amp; diagrams</div></div></div>
+      <div class="card qa"><div class="dot" style="background:#dcfce7; color:#16a34a;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12M8 11l4 4 4-4M4 21h16"/></svg></div><div><div style="font-weight:700;">Import students (CSV)</div><div class="muted" style="font-size:12px;">Add a whole batch at once</div></div></div>
+      <div class="card qa"><div class="dot" style="background:#fef3c7; color:#d97706;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5z"/></svg></div><div><div style="font-weight:700;">Question bank</div><div class="muted" style="font-size:12px;">Reuse questions across tests</div></div></div>
+    </div>
+
+    <!-- two columns: recent tests + activity -->
+    <div style="display:grid; grid-template-columns:1.4fr 1fr; gap:16px; margin-top:16px;">
+      <div class="card" style="padding:20px 22px;">
+        <div style="font-weight:700; margin-bottom:12px;">Recent tests</div>
+        <div style="display:flex; align-items:center; justify-content:space-between; padding:12px 0; border-bottom:1px solid var(--line);"><div><div style="font-weight:600;">NEET Mock Test 1</div><div class="muted" style="font-size:12px;">10 submitted · top 27/27</div></div><span class="btn gh">Results</span></div>
+        <div style="display:flex; align-items:center; justify-content:space-between; padding:12px 0;"><div><div style="font-weight:600;">Chemistry Rapid Quiz</div><div class="muted" style="font-size:12px;">5 submitted · top 6/6</div></div><span class="btn gh">Results</span></div>
+      </div>
+      <div class="card" style="padding:20px 22px;">
+        <div style="font-weight:700; margin-bottom:12px;">Recent activity</div>
+        <div style="display:flex; gap:10px; padding:8px 0;"><div class="dot" style="width:26px; height:26px; background:#eef2ff; color:var(--brand);"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg></div><div style="font-size:13px;">You created <b>Chemistry Rapid Quiz</b><div class="muted" style="font-size:11px;">2h ago</div></div></div>
+        <div style="display:flex; gap:10px; padding:8px 0;"><div class="dot" style="width:26px; height:26px; background:#dcfce7; color:#16a34a;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg></div><div style="font-size:13px;">Aarav Sharma scored <b>27/27</b><div class="muted" style="font-size:11px;">Yesterday</div></div></div>
+        <div style="display:flex; gap:10px; padding:8px 0;"><div class="dot" style="width:26px; height:26px; background:#fef3c7; color:#d97706;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 2M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z"/></svg></div><div style="font-size:13px;"><b>3</b> short answers awaiting grading<div class="muted" style="font-size:11px;">NEET Mock Test 1</div></div></div>
+      </div>
+    </div>
+  </div>
+</div>
+<script data-dc-script data-props='{}'>
+class Component extends DCLogic { renderVals(){ return {}; } }
+</script>
+</x-dc>
+</body>
+</html>
