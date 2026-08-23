@@ -18,6 +18,18 @@ export default function StudentDashboard() {
     api('/api/my-orgs').then((d) => setOrgs(d.orgs)).catch(() => setOrgs([]));
   }, [user]);
 
+  // Ranks/percentiles keep shifting as other students finish over the next few
+  // days, so refresh in the background: on a timer, and whenever the student
+  // returns to the tab.
+  useEffect(() => {
+    if (!user) return;
+    const id = setInterval(loadAssignments, 45000);
+    const onFocus = () => { if (!document.hidden) loadAssignments(); };
+    document.addEventListener('visibilitychange', onFocus);
+    window.addEventListener('focus', onFocus);
+    return () => { clearInterval(id); document.removeEventListener('visibilitychange', onFocus); window.removeEventListener('focus', onFocus); };
+  }, [user]);
+
   const storeKey = user ? 'testit-active-org-' + user.id : null;
 
   // Once orgs are known: single-org students skip straight in; multi-org students
@@ -43,6 +55,10 @@ export default function StudentDashboard() {
   const perOrg = multi && activeOrg !== 'all' && activeOrg !== null;
   const visible = (assignments || []).filter((a) => (perOrg ? a.orgId === activeOrg : true));
   const activeName = perOrg ? (orgs.find((o) => o.id === activeOrg) || {}).name : null;
+  // Overall standing across the tests the student has completed (live).
+  const ranked = visible.filter((a) => a.submitted && a.percentile != null);
+  const avgPct = ranked.length ? Math.round((ranked.reduce((s, a) => s + a.percentile, 0) / ranked.length) * 10) / 10 : null;
+  const bestPct = ranked.length ? Math.max(...ranked.map((a) => a.percentile)) : null;
 
   return (
     <>
@@ -66,6 +82,18 @@ export default function StudentDashboard() {
               : 'Tests your teachers have assigned to you.'}
           </p>
         </div>
+        {ranked.length > 0 && (
+          <div className="card" style={{ background: 'linear-gradient(135deg, #eef2ff, #f5f3ff)' }}>
+            <div className="row" style={{ gap: 28, flexWrap: 'wrap', alignItems: 'center' }}>
+              <Stat big={avgPct} label="Average percentile" />
+              <Stat big={bestPct} label="Best percentile" />
+              <Stat big={ranked.length} label="Tests completed" />
+            </div>
+            <p className="muted" style={{ margin: '10px 0 0', fontSize: 12 }}>
+              🔄 Your percentile &amp; rank update live as classmates finish — this page refreshes automatically.
+            </p>
+          </div>
+        )}
         {assignments === null ? (
           <div className="card"><p className="muted">Loading…</p></div>
         ) : visible.length === 0 ? (
@@ -85,6 +113,11 @@ export default function StudentDashboard() {
                     {a.needsGrading
                       ? <span className="pill amber">submitted · awaiting grade</span>
                       : <span className="pill green">Score: {a.score} / {a.maxScore}</span>}
+                    {a.percentile != null && (
+                      <span className="pill" style={{ background: '#e0e7ff', color: '#3730a3', fontWeight: 600 }} title="Live — updates as more students finish">
+                        📊 {a.percentile} %ile · Rank {a.rank}/{a.totalTakers}
+                      </span>
+                    )}
                     <Link className="btn secondary small" to={'/review?a=' + a.assignmentId}>Review answers</Link>
                   </>
                 ) : a.closed ? (
@@ -137,6 +170,16 @@ export default function StudentDashboard() {
         </Modal>
       )}
     </>
+  );
+}
+
+// A compact headline number + caption for the standing summary.
+function Stat({ big, label }) {
+  return (
+    <div>
+      <div style={{ fontSize: 30, fontWeight: 800, lineHeight: 1, color: '#3730a3' }}>{big}</div>
+      <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>{label}</div>
+    </div>
   );
 }
 

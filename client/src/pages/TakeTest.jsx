@@ -44,6 +44,7 @@ export default function TakeTest() {
   const [remaining, setRemaining] = useState(null);
   const [result, setResult] = useState(null);   // { autoScore, maxScore, needsGrading, auto }
   const [confirmSubmit, setConfirmSubmit] = useState(false); // in-app submit confirmation
+  const [rankInfo, setRankInfo] = useState(null);          // { rank, total, percentile } after submit
   const [marked, setMarked] = useState(() => new Set());   // question ids flagged for review
   const [visited, setVisited] = useState(() => new Set()); // question indices seen at least once
   const [paletteOpen, setPaletteOpen] = useState(true);    // palette panel expanded?
@@ -113,6 +114,14 @@ export default function TakeTest() {
   async function requestFs() {
     try { await document.documentElement.requestFullscreen(); } catch { /* best effort */ }
   }
+
+  // After submitting, fetch the live rank + percentile for the results screen.
+  useEffect(() => {
+    if (!result) return;
+    let alive = true;
+    api('/api/my-assignments/' + assignmentId + '/rank').then((d) => { if (alive) setRankInfo(d); }).catch(() => {});
+    return () => { alive = false; };
+  }, [result, assignmentId]);
 
   // Monitor for tab-switches, fullscreen exits, and copy/paste while a proctored
   // test is in progress. Each violation warns; at the limit the test auto-submits.
@@ -214,6 +223,13 @@ export default function TakeTest() {
               {result.reason === 'violations' ? '🔒 Your test was auto-submitted because the proctoring violation limit was reached. ' : (result.auto ? "⏱ Time's up — your test was submitted automatically. " : '')}
               {result.needsGrading ? 'Some written answers still need to be graded by your teacher.' : ''}
             </p>
+            {rankInfo && rankInfo.percentile != null && (
+              <div className="card" style={{ maxWidth: 380, margin: '4px auto 16px', background: 'linear-gradient(135deg, #eef2ff, #f5f3ff)' }}>
+                <div style={{ fontSize: 34, fontWeight: 800, color: '#3730a3', lineHeight: 1 }}>{rankInfo.percentile} <span style={{ fontSize: 18 }}>percentile</span></div>
+                <div className="muted" style={{ marginTop: 6 }}>Rank <b>{rankInfo.rank}</b> of <b>{rankInfo.total}</b> so far{rankInfo.needsGrading ? ' · provisional' : ''}</div>
+                <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>🔄 Updates as more students finish.</div>
+              </div>
+            )}
             <SectionBreakdown rows={result.sectionBreakdown} />
             <div className="row" style={{ justifyContent: 'center', gap: 10 }}>
               <Link className="btn secondary" to={'/review?a=' + assignmentId}>Review my answers</Link>

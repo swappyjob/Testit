@@ -24,11 +24,13 @@ export default function StudentReview() {
   const [params] = useSearchParams();
   const assignmentId = params.get('a');
   const [data, setData] = useState(null);
+  const [rankInfo, setRankInfo] = useState(null);
   const [msg, setMsg] = useState('');
 
   useEffect(() => {
     if (!user) return;
     api('/api/my-review/' + assignmentId).then(setData).catch((e) => setMsg(e.message));
+    api('/api/my-assignments/' + assignmentId + '/rank').then(setRankInfo).catch(() => {});
   }, [user]);
 
   if (!user) return null;
@@ -47,6 +49,13 @@ export default function StudentReview() {
             {data.needsGrading ? 'Auto-graded score' : 'Your score'}: <b>{data.score}</b> / {data.maxScore}
             {data.needsGrading ? <span className="muted" style={{ fontSize: 14 }}> · some written answers still to be graded</span> : null}
           </p>
+          {rankInfo && rankInfo.percentile != null && (
+            <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+              <span className="pill" style={{ background: '#e0e7ff', color: '#3730a3', fontWeight: 600 }}>📊 {rankInfo.percentile} percentile</span>
+              <span className="pill" style={{ background: '#e0e7ff', color: '#3730a3', fontWeight: 600 }}>🏅 Rank {rankInfo.rank} of {rankInfo.total}</span>
+              <span className="muted" style={{ fontSize: 12, alignSelf: 'center' }}>live — updates as more students finish</span>
+            </div>
+          )}
           <p className="muted">Here are all the questions with your answers and the correct answers. This page is read-only.</p>
         </div>
 

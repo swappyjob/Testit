@@ -1624,6 +1624,32 @@ function membershipActive(m) {
   return !!m && !m.disabled && !isExpired(m.access_until);
 }
 
+// Live rank + percentile for a score on a test, across everyone who has
+// submitted so far. Recomputed on every call (never cached) so it stays current
+// as more students finish over the following days.
+//   rank        — 1-based, competition ranking (ties share a rank)
+//   percentile  — NTA-style: 100 × (candidates scoring at or below you) / total
+async function computeRank(testId, myScore) {
+  const total = (await get('SELECT COUNT(*) AS c FROM attempts WHERE test_id = ? AND submitted_at IS NOT NULL', [testId])).c;
+  if (total === 0) return { rank: null, total: 0, percentile: null };
+  const better = (await get('SELECT COUNT(*) AS c FROM attempts WHERE test_id = ? AND submitted_at IS NOT NULL AND (auto_score + manual_score) > ?', [testId, myScore])).c;
+  const atOrBelow = (await get('SELECT COUNT(*) AS c FROM attempts WHERE test_id = ? AND submitted_at IS NOT NULL AND (auto_score + manual_score) <= ?', [testId, myScore])).c;
+  return { rank: better + 1, total, percentile: Math.round((atOrBelow / total) * 1000) / 10 };
+}
+
+// Live rank/percentile for the student's own submitted attempt on one test.
+app.get('/api/my-assignments/:assignmentId/rank', requireAuth('student'), h(async (req, res) => {
+  const a = await get('SELECT * FROM assignments WHERE id = ? AND student_id = ?', [req.params.assignmentId, req.user.id]);
+  if (!a) return res.status(404).json({ error: 'Assignment not found.' });
+  if (!membershipActive(await membershipForTest(req.user.id, a.test_id)))
+    return res.status(403).json({ error: 'This test belongs to an organization you no longer have access to.' });
+  const attempt = await get('SELECT * FROM attempts WHERE assignment_id = ? AND submitted_at IS NOT NULL', [a.id]);
+  if (!attempt) return res.status(409).json({ error: 'You have not submitted this test yet.' });
+  const myScore = attempt.auto_score + attempt.manual_score;
+  const rank = await computeRank(a.test_id, myScore);
+  res.json({ ...rank, score: myScore, maxScore: attempt.max_score, needsGrading: !!attempt.needs_grading });
+}));
+
 // The organizations a student is an active member of (for the org switcher).
 app.get('/api/my-orgs', requireAuth('student'), h(async (req, res) => {
   const rows = await all(
@@ -1646,7 +1672,10 @@ app.get('/api/my-assignments', requireAuth('student'), h(async (req, res) => {
             o.id AS org_id, o.name AS org_name, st.access_until AS membership_access,
             (SELECT COUNT(*) FROM questions q WHERE q.test_id = t.id AND q.archived = 0) AS question_count,
             at.id AS attempt_id, at.submitted_at, at.auto_score, at.manual_score,
-            at.max_score, at.needs_grading
+            at.max_score, at.needs_grading,
+            (SELECT COUNT(*) FROM attempts x WHERE x.test_id = t.id AND x.submitted_at IS NOT NULL) AS test_submissions,
+            (SELECT COUNT(*) FROM attempts x WHERE x.test_id = t.id AND x.submitted_at IS NOT NULL AND (x.auto_score + x.manual_score) > (at.auto_score + at.manual_score)) AS better_count,
+            (SELECT COUNT(*) FROM attempts x WHERE x.test_id = t.id AND x.submitted_at IS NOT NULL AND (x.auto_score + x.manual_score) <= (at.auto_score + at.manual_score)) AS atorbelow_count
        FROM assignments a
        JOIN tests t ON t.id = a.test_id
        JOIN users tu ON tu.id = t.teacher_id
@@ -1667,6 +1696,7 @@ app.get('/api/my-assignments', requireAuth('student'), h(async (req, res) => {
       const requiresSlot = !!r.requires_slot;
       const slotAt = r.booked_slot_at || null;
       const win = slotAt ? slotWindow(slotAt, r.duration_minutes) : null;
+      const takers = r.test_submissions;
       return {
         assignmentId: r.assignment_id,
         testId: r.test_id,
@@ -1680,6 +1710,10 @@ app.get('/api/my-assignments', requireAuth('student'), h(async (req, res) => {
         needsGrading: !!r.needs_grading,
         score: submitted ? r.auto_score + r.manual_score : null,
         maxScore: r.max_score,
+        // Live rank + percentile among everyone who has submitted this test.
+        rank: submitted ? r.better_count + 1 : null,
+        totalTakers: submitted ? takers : null,
+        percentile: submitted && takers > 0 ? Math.round((r.atorbelow_count / takers) * 1000) / 10 : null,
         dueDate: r.due_date,
         closed: isClosed(r.due_date),
         startsAt: r.starts_at || '',
