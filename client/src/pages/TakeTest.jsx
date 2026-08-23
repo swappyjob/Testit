@@ -44,6 +44,8 @@ export default function TakeTest() {
   const [remaining, setRemaining] = useState(null);
   const [result, setResult] = useState(null);   // { autoScore, maxScore, needsGrading, auto }
   const [confirmSubmit, setConfirmSubmit] = useState(false); // in-app submit confirmation
+  const [marked, setMarked] = useState(() => new Set());   // question ids flagged for review
+  const [visited, setVisited] = useState(() => new Set()); // question indices seen at least once
   const submitting = useRef(false);
   const intervalRef = useRef(null);
 
@@ -85,6 +87,8 @@ export default function TakeTest() {
       const ans = (saved && saved.answers) || {};
       const idx = saved && Number.isInteger(saved.current) ? saved.current : 0;
       if (Object.keys(ans).length) setAnswers(ans);
+      if (saved && Array.isArray(saved.marked)) setMarked(new Set(saved.marked));
+      if (saved && Array.isArray(saved.visited)) setVisited(new Set(saved.visited));
       if (d.questions) setCurrent(Math.max(0, Math.min(idx, d.questions.length - 1)));
       if (d.durationMinutes > 0 && d.remainingSeconds != null) setRemaining(d.remainingSeconds);
       setStarted(true);
@@ -92,11 +96,18 @@ export default function TakeTest() {
     finally { setBeginning(false); }
   }
 
-  // Persist answers + position to the browser only (no server writes).
+  // Persist answers + position + review flags to the browser only (no server writes).
   useEffect(() => {
     if (!data || result) return;
-    try { localStorage.setItem(storageKey, JSON.stringify({ answers, current })); } catch { /* ignore */ }
-  }, [answers, current, data, result, storageKey]);
+    try { localStorage.setItem(storageKey, JSON.stringify({ answers, current, marked: [...marked], visited: [...visited] })); } catch { /* ignore */ }
+  }, [answers, current, marked, visited, data, result, storageKey]);
+
+  // Track which questions the student has landed on (for the palette's
+  // "not answered" vs "not visited" distinction).
+  useEffect(() => {
+    if (!data) return;
+    setVisited((prev) => (prev.has(current) ? prev : new Set(prev).add(current)));
+  }, [current, data]);
 
   async function requestFs() {
     try { await document.documentElement.requestFullscreen(); } catch { /* best effort */ }
@@ -268,9 +279,35 @@ export default function TakeTest() {
   const last = current === questions.length - 1;
   const isAnswered = (qq) => { const v = answers[qq.id]; return v != null && v !== '' && v !== '[]'; };
   const blankCount = questions.filter((qq) => !isAnswered(qq)).length;
+  const answeredCount = questions.length - blankCount;
+  const markedCount = questions.filter((qq) => marked.has(qq.id)).length;
   const timed = data.durationMinutes > 0 && remaining != null;
   const mm = Math.floor((remaining || 0) / 60);
   const ss = String((remaining || 0) % 60).padStart(2, '0');
+
+  // Review flags + response controls for the current question.
+  const isMarkedCurrent = !!(q && marked.has(q.id));
+  const toggleMark = () => { if (!q) return; setMarked((prev) => { const n = new Set(prev); n.has(q.id) ? n.delete(q.id) : n.add(q.id); return n; }); };
+  const clearResponse = () => { if (!q) return; setAnswers((a) => { const n = { ...a }; delete n[q.id]; return n; }); };
+
+  // Palette status → colour. Mirrors the familiar exam-hall legend.
+  const PAL = {
+    answered: { bg: '#16a34a', fg: '#fff', label: 'Answered' },
+    'not-answered': { bg: '#dc2626', fg: '#fff', label: 'Not answered' },
+    marked: { bg: '#7c3aed', fg: '#fff', label: 'Marked for review' },
+    'answered-marked': { bg: '#7c3aed', fg: '#fff', label: 'Answered & marked' },
+    'not-visited': { bg: '#e5e7eb', fg: '#334155', label: 'Not visited' },
+  };
+  const statusOf = (i) => {
+    const qq = questions[i];
+    const ans = isAnswered(qq);
+    const mk = marked.has(qq.id);
+    if (ans && mk) return 'answered-marked';
+    if (mk) return 'marked';
+    if (ans) return 'answered';
+    if (visited.has(i)) return 'not-answered';
+    return 'not-visited';
+  };
 
   return (
     <>
@@ -307,9 +344,13 @@ export default function TakeTest() {
           )}
         </div>
 
+        <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+        <div style={{ flex: '3 1 420px', minWidth: 0 }}>
         <div className="q-card">
           {q.section && <div className="pill brand" style={{ marginBottom: 8 }}>{q.section}</div>}
-          <h3>Q{current + 1}. <MathText text={q.prompt} /> <span className="muted">({q.points} pt)</span></h3>
+          <h3>Q{current + 1}. <MathText text={q.prompt} /> <span className="muted">({q.points} pt)</span>
+            {isMarkedCurrent && <span className="pill" style={{ background: '#ede9fe', color: '#6d28d9', marginLeft: 8 }}>🚩 Marked for review</span>}
+          </h3>
           {q.image && <img src={q.image} alt="" style={{ maxWidth: '100%', maxHeight: 260, border: '1px solid var(--line)', borderRadius: 8, display: 'block', marginBottom: 10 }} />}
           {q.type === 'mcq' && q.options.map((opt, idx) => (
             <label className="choice" key={idx}>
@@ -337,6 +378,12 @@ export default function TakeTest() {
         </div>
 
         <div className="card">
+          <div className="row" style={{ gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+            <button className={'btn small' + (isMarkedCurrent ? '' : ' secondary')} type="button" onClick={toggleMark}>
+              {isMarkedCurrent ? '🚩 Unmark review' : '🚩 Mark for review'}
+            </button>
+            <button className="btn ghost small" type="button" onClick={clearResponse} disabled={!isAnswered(q)}>Clear response</button>
+          </div>
           <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
             <button className="btn ghost" type="button" disabled={current === 0} onClick={() => setCurrent((c) => Math.max(0, c - 1))}>← Previous</button>
             <span className="muted">Question {current + 1} of {questions.length}</span>
@@ -345,19 +392,60 @@ export default function TakeTest() {
               : <button className="btn" type="button" onClick={() => setCurrent((c) => Math.min(questions.length - 1, c + 1))}>Next →</button>}
           </div>
           <p className="muted" style={{ margin: '10px 0 0', fontSize: 13 }}>
-            Use Previous / Next to move between questions. Your answers are kept as you navigate. You can only submit once.
+            Jump to any question from the palette. Your answers are kept as you navigate. You can only submit once.
           </p>
         </div>
+        </div>{/* end question column */}
+
+        {/* Question palette — jump anywhere, see what's answered / marked. */}
+        <div style={{ flex: '1 1 220px', minWidth: 0 }}>
+          <div className="card" style={{ position: 'sticky', top: 12 }}>
+            <h3 style={{ marginTop: 0, fontSize: 16 }}>Questions</h3>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              {questions.map((qq, i) => {
+                const st = statusOf(i);
+                const c = PAL[st];
+                const isCur = i === current;
+                return (
+                  <button key={qq.id} type="button" onClick={() => setCurrent(i)}
+                    title={`Q${i + 1} — ${c.label}`}
+                    style={{ position: 'relative', width: 38, height: 38, borderRadius: 8, fontWeight: 700, cursor: 'pointer',
+                      background: c.bg, color: c.fg, border: isCur ? '3px solid #111827' : '1px solid rgba(0,0,0,.12)' }}>
+                    {i + 1}
+                    {st === 'answered-marked' && (
+                      <span style={{ position: 'absolute', top: -4, right: -4, width: 13, height: 13, borderRadius: '50%', background: '#16a34a', border: '2px solid #fff' }} />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+            <div style={{ marginTop: 14, display: 'grid', gap: 6, fontSize: 12 }}>
+              {['answered', 'not-answered', 'marked', 'answered-marked', 'not-visited'].map((k) => (
+                <div key={k} className="row" style={{ gap: 8, alignItems: 'center' }}>
+                  <span style={{ width: 16, height: 16, borderRadius: 4, background: PAL[k].bg, border: '1px solid rgba(0,0,0,.12)', display: 'inline-block' }} />
+                  <span className="muted">{PAL[k].label}</span>
+                </div>
+              ))}
+            </div>
+            <p className="muted" style={{ margin: '12px 0 0', fontSize: 13 }}>
+              <b>{answeredCount}</b> answered · <b>{markedCount}</b> marked · <b>{blankCount}</b> left
+            </p>
+            {last
+              ? <button className="btn" type="button" style={{ marginTop: 12, width: '100%' }} onClick={() => setConfirmSubmit(true)}>Submit test</button>
+              : <button className="btn secondary" type="button" style={{ marginTop: 12, width: '100%' }} onClick={() => setConfirmSubmit(true)}>Submit test</button>}
+          </div>
+        </div>
+        </div>{/* end question + palette row */}
       </div>
 
       {confirmSubmit && (
         <Modal title="Submit your test?" onClose={() => setConfirmSubmit(false)}>
           <p style={{ marginTop: 0 }}>Once you submit, you <b>can't change your answers</b>.</p>
-          {blankCount > 0 && (
-            <p className="pill amber" style={{ display: 'inline-block' }}>
-              {blankCount} question{blankCount === 1 ? '' : 's'} still unanswered.
-            </p>
-          )}
+          <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+            <span className="pill green">{answeredCount} answered</span>
+            {blankCount > 0 && <span className="pill amber">{blankCount} unanswered</span>}
+            {markedCount > 0 && <span className="pill" style={{ background: '#ede9fe', color: '#6d28d9' }}>{markedCount} marked for review</span>}
+          </div>
           <div className="row" style={{ justifyContent: 'flex-end', gap: 10, marginTop: 18 }}>
             <button className="btn ghost" type="button" onClick={() => setConfirmSubmit(false)}>Keep working</button>
             <button className="btn" type="button" onClick={() => doSubmit(false)}>Submit now</button>
