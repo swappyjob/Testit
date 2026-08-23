@@ -1,8 +1,11 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api.js';
 import { Msg, Modal } from '../components.jsx';
+import { useConfirm, useAlert } from '../confirm.jsx';
 
 export default function TeachersTab({ readOnly }) {
+  const confirm = useConfirm();
+  const alert = useAlert();
   const [data, setData] = useState(null); // { teachers, canManage }
   const [form, setForm] = useState({ name: '', email: '', phone: '', role: 'teacher' });
   const [editing, setEditing] = useState(null); // teacher row being edited
@@ -21,7 +24,7 @@ export default function TeachersTab({ readOnly }) {
     } catch (e) { setMsg({ ok: false, text: e.message }); }
   }
   async function toggle(t) {
-    if (!t.disabled && !window.confirm(`Disable ${t.name}? They will be logged out immediately and cannot log in until you re-enable them.`)) return;
+    if (!t.disabled && !(await confirm({ title: `Disable ${t.name}?`, body: 'They will be logged out immediately and cannot log in until you re-enable them.', confirmLabel: 'Disable', danger: true }))) return;
     try { await api('/api/teachers/' + t.id, 'PATCH', { disabled: !t.disabled }); load(); }
     catch (e) { setMsg({ ok: false, text: e.message }); }
   }

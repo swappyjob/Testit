@@ -1,5 +1,6 @@
 import { useRef, useEffect, useState } from 'react';
 import { Modal } from '../components.jsx';
+import { useAlert } from '../confirm.jsx';
 
 const W = 780, H = 460;
 const COLORS = ['#111827', '#dc2626', '#2563eb', '#16a34a', '#f59e0b', '#7c3aed'];
@@ -7,6 +8,7 @@ const COLORS = ['#111827', '#dc2626', '#2563eb', '#16a34a', '#f59e0b', '#7c3aed'
 // A lightweight whiteboard for drawing question diagrams (benzene rings,
 // circuits, free sketches, hand-written math). Exports a PNG data URL.
 export default function DrawingPad({ initial, onClose, onSave }) {
+  const alert = useAlert();
   const canvasRef = useRef(null);
   const ctxRef = useRef(null);
   const drawingRef = useRef(false);

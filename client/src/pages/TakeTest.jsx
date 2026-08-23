@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
 import { api } from '../api.js';
 import { useRequireRole } from '../auth.js';
-import { DashboardBar, Msg, fmtDateTime } from '../components.jsx';
+import { DashboardBar, Modal, Msg, fmtDateTime } from '../components.jsx';
 import { MathText } from '../mathText.jsx';
 
 // Per-section score table. Only renders when the test actually used sections.
@@ -35,12 +35,15 @@ export default function TakeTest() {
   const assignmentId = params.get('a');
   const storageKey = 'testit-attempt-' + assignmentId; // browser-side resume, no server load
 
+  const [preview, setPreview] = useState(null); // instructions metadata (no attempt created yet)
   const [data, setData] = useState(null);       // { test, questions, durationMinutes, remainingSeconds }
+  const [beginning, setBeginning] = useState(false);
   const [msg, setMsg] = useState('');
   const [current, setCurrent] = useState(0);
   const [answers, setAnswers] = useState({});   // { questionId: value }
   const [remaining, setRemaining] = useState(null);
   const [result, setResult] = useState(null);   // { autoScore, maxScore, needsGrading, auto }
+  const [confirmSubmit, setConfirmSubmit] = useState(false); // in-app submit confirmation
   const submitting = useRef(false);
   const intervalRef = useRef(null);
 
@@ -49,26 +52,45 @@ export default function TakeTest() {
   const [violationMsg, setViolationMsg] = useState('');
   const [outOfFs, setOutOfFs] = useState(false);
   const [started, setStarted] = useState(false); // proctored start gate (fullscreen)
-  const proctored = !!(data && data.test && data.test.proctored);
-  const maxV = (data && data.test && data.test.max_violations) || 3;
+  const testMeta = (data && data.test) || (preview && preview.test) || null;
+  const proctored = !!(testMeta && testMeta.proctored);
+  const maxV = (testMeta && testMeta.max_violations) || 3;
 
+  // First load only the instructions (no attempt / no timer yet).
   useEffect(() => {
     if (!user) return;
-    api('/api/take/' + assignmentId)
+    api('/api/take/' + assignmentId + '?preview=1')
       .then((d) => {
-        setData(d);
-        // Resume from the browser (localStorage) — survives refresh/crash on the
-        // same device with zero server load. Nothing is streamed to the server.
-        let saved = null;
-        try { const raw = localStorage.getItem(storageKey); if (raw) saved = JSON.parse(raw); } catch { /* ignore */ }
-        const ans = (saved && saved.answers) || {};
-        const idx = saved && Number.isInteger(saved.current) ? saved.current : 0;
-        if (Object.keys(ans).length) setAnswers(ans);
-        if (d.questions) setCurrent(Math.max(0, Math.min(idx, d.questions.length - 1)));
-        if (d.durationMinutes > 0 && d.remainingSeconds != null) setRemaining(d.remainingSeconds);
+        setPreview(d);
+        // A non-proctored test already in progress resumes straight in (the
+        // student clicked "Resume"). Proctored tests show the gate so the
+        // student re-enters fullscreen with a click.
+        if (d.inProgress && !(d.test && d.test.proctored)) beginTest();
       })
       .catch((e) => setMsg(e.message));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
+
+  // Create the attempt (starts the timer) and load the questions.
+  async function beginTest() {
+    if (beginning) return;
+    setBeginning(true); setMsg('');
+    try {
+      if (proctored) await requestFs();
+      const d = await api('/api/take/' + assignmentId);
+      setData(d);
+      // Resume answers/position from the browser (survives refresh on this device).
+      let saved = null;
+      try { const raw = localStorage.getItem(storageKey); if (raw) saved = JSON.parse(raw); } catch { /* ignore */ }
+      const ans = (saved && saved.answers) || {};
+      const idx = saved && Number.isInteger(saved.current) ? saved.current : 0;
+      if (Object.keys(ans).length) setAnswers(ans);
+      if (d.questions) setCurrent(Math.max(0, Math.min(idx, d.questions.length - 1)));
+      if (d.durationMinutes > 0 && d.remainingSeconds != null) setRemaining(d.remainingSeconds);
+      setStarted(true);
+    } catch (e) { setMsg(e.message); }
+    finally { setBeginning(false); }
+  }
 
   // Persist answers + position to the browser only (no server writes).
   useEffect(() => {
@@ -79,7 +101,6 @@ export default function TakeTest() {
   async function requestFs() {
     try { await document.documentElement.requestFullscreen(); } catch { /* best effort */ }
   }
-  async function startProctored() { await requestFs(); setStarted(true); }
 
   // Monitor for tab-switches, fullscreen exits, and copy/paste while a proctored
   // test is in progress. Each violation warns; at the limit the test auto-submits.
@@ -150,7 +171,7 @@ export default function TakeTest() {
 
   async function doSubmit(auto, reason) {
     if (submitting.current) return;
-    if (!auto && !window.confirm('Submit your test? You cannot change answers after this.')) return;
+    setConfirmSubmit(false);
     submitting.current = true;
     clearInterval(intervalRef.current);
     try {
@@ -192,27 +213,50 @@ export default function TakeTest() {
     );
   }
 
-  if (msg && !data) return (<>{bar}<div className="container"><Msg text={msg} /></div></>);
-  if (!data) return (<>{bar}<div className="container"><div className="card"><p className="muted">Loading…</p></div></div></>);
+  if (msg && !preview && !data) return (<>{bar}<div className="container"><Msg text={msg} /></div></>);
+  if (!preview && !data) return (<>{bar}<div className="container"><div className="card"><p className="muted">Loading…</p></div></div></>);
 
-  // Proctored tests start behind a fullscreen gate with the rules.
-  if (proctored && !started) {
+  // Instructions screen — shown until the student clicks Begin (which creates the
+  // attempt and, for timed tests, starts the countdown). Also the proctoring gate.
+  if (!data) {
+    const t = preview.test;
+    const beginLabel = preview.inProgress ? 'Resume test' : proctored ? 'Start test in fullscreen' : 'Begin test';
     return (
       <>
         {bar}
         <div className="container">
-          <div className="card center">
-            <h1>🔒 {data.test.title}</h1>
-            <p className="muted" style={{ maxWidth: 520, margin: '8px auto' }}>
-              This is a <b>proctored</b> test — it runs in fullscreen and monitors for cheating:
-            </p>
-            <ul style={{ textAlign: 'left', maxWidth: 520, margin: '0 auto 16px', color: 'var(--muted)', lineHeight: 1.9 }}>
-              <li>Stay in <b>fullscreen</b> — leaving it counts as a violation.</li>
-              <li>Do <b>not</b> switch tabs or windows.</li>
-              <li>Copy, paste and right-click are disabled.</li>
-              <li>After <b>{maxV}</b> violations the test auto-submits, and every violation is recorded for your teacher.</li>
+          <div className="card">
+            <h1 style={{ marginTop: 0 }}>{proctored ? '🔒 ' : ''}{t.title}</h1>
+            {t.description && <p style={{ marginTop: 4 }}>{t.description}</p>}
+            <h3 style={{ margin: '16px 0 8px' }}>Before you begin</h3>
+            <ul style={{ color: 'var(--muted)', lineHeight: 1.9, marginTop: 0 }}>
+              <li><b>{preview.questionCount}</b> question(s) · <b>{preview.totalMarks}</b> total marks.</li>
+              {preview.durationMinutes > 0
+                ? <li>Time limit: <b>{preview.durationMinutes} minute(s)</b>. The timer starts the moment you click <b>{beginLabel}</b>.</li>
+                : <li>No time limit — take as long as you need.</li>}
+              {t.due_date && <li>Deadline: <b>{fmtDateTime(t.due_date)}</b>.</li>}
+              {preview.slotCloseAt && <li>Your slot closes at <b>{fmtDateTime(preview.slotCloseAt)}</b> — submit before then.</li>}
+              <li>Use <b>Previous / Next</b> to move between questions. Your answers are kept as you navigate.</li>
+              <li>You can <b>submit only once</b>, and can't change answers after submitting.</li>
+              {t.negative_marking
+                ? <li style={{ color: '#92400e' }}>⚠️ <b>Negative marking is ON</b>: {t.penalty} mark(s) deducted per wrong multiple-choice / multiple-answer / true-false answer. Blank answers cost nothing.</li>
+                : null}
             </ul>
-            <button className="btn" onClick={startProctored}>Start test in fullscreen</button>
+            {proctored && (
+              <div className="msg" style={{ background: '#fef3c7', color: '#92400e' }}>
+                <b>🔒 This is a proctored test.</b> It runs in fullscreen and monitors for cheating:
+                <ul style={{ margin: '6px 0 0', lineHeight: 1.8 }}>
+                  <li>Stay in <b>fullscreen</b> — leaving it counts as a violation.</li>
+                  <li>Do <b>not</b> switch tabs or windows. Copy, paste and right-click are disabled.</li>
+                  <li>After <b>{maxV}</b> violations the test auto-submits, and every violation is recorded for your teacher.</li>
+                </ul>
+              </div>
+            )}
+            <Msg text={msg} />
+            <div className="row" style={{ marginTop: 16, gap: 10 }}>
+              <button className="btn" onClick={beginTest} disabled={beginning}>{beginning ? 'Starting…' : beginLabel}</button>
+              <Link className="btn ghost" to="/student">Cancel</Link>
+            </div>
           </div>
         </div>
       </>
@@ -222,6 +266,8 @@ export default function TakeTest() {
   const { test, questions } = data;
   const q = questions[current];
   const last = current === questions.length - 1;
+  const isAnswered = (qq) => { const v = answers[qq.id]; return v != null && v !== '' && v !== '[]'; };
+  const blankCount = questions.filter((qq) => !isAnswered(qq)).length;
   const timed = data.durationMinutes > 0 && remaining != null;
   const mm = Math.floor((remaining || 0) / 60);
   const ss = String((remaining || 0) % 60).padStart(2, '0');
@@ -295,7 +341,7 @@ export default function TakeTest() {
             <button className="btn ghost" type="button" disabled={current === 0} onClick={() => setCurrent((c) => Math.max(0, c - 1))}>← Previous</button>
             <span className="muted">Question {current + 1} of {questions.length}</span>
             {last
-              ? <button className="btn" type="button" onClick={() => doSubmit(false)}>Submit test</button>
+              ? <button className="btn" type="button" onClick={() => setConfirmSubmit(true)}>Submit test</button>
               : <button className="btn" type="button" onClick={() => setCurrent((c) => Math.min(questions.length - 1, c + 1))}>Next →</button>}
           </div>
           <p className="muted" style={{ margin: '10px 0 0', fontSize: 13 }}>
@@ -303,6 +349,21 @@ export default function TakeTest() {
           </p>
         </div>
       </div>
+
+      {confirmSubmit && (
+        <Modal title="Submit your test?" onClose={() => setConfirmSubmit(false)}>
+          <p style={{ marginTop: 0 }}>Once you submit, you <b>can't change your answers</b>.</p>
+          {blankCount > 0 && (
+            <p className="pill amber" style={{ display: 'inline-block' }}>
+              {blankCount} question{blankCount === 1 ? '' : 's'} still unanswered.
+            </p>
+          )}
+          <div className="row" style={{ justifyContent: 'flex-end', gap: 10, marginTop: 18 }}>
+            <button className="btn ghost" type="button" onClick={() => setConfirmSubmit(false)}>Keep working</button>
+            <button className="btn" type="button" onClick={() => doSubmit(false)}>Submit now</button>
+          </div>
+        </Modal>
+      )}
     </>
   );
 }

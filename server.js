@@ -1792,8 +1792,11 @@ app.get('/api/my-review/:assignmentId', requireAuth('student'), h(async (req, re
   });
 }));
 
-// Fetch a test to take — WITHOUT correct answers.
+// Fetch a test to take — WITHOUT correct answers. With ?preview=1 it returns
+// only the instructions metadata and does NOT create an attempt or start the
+// timer (used for the "read the rules, then Begin" screen).
 app.get('/api/take/:assignmentId', requireAuth('student'), h(async (req, res) => {
+  const preview = req.query.preview === '1' || req.query.preview === 'true';
   const a = await get('SELECT * FROM assignments WHERE id = ? AND student_id = ?', [req.params.assignmentId, req.user.id]);
   if (!a) return res.status(404).json({ error: 'Assignment not found.' });
   if (!membershipActive(await membershipForTest(req.user.id, a.test_id)))
@@ -1821,6 +1824,22 @@ app.get('/api/take/:assignmentId', requireAuth('student'), h(async (req, res) =>
       return res.status(403).json({ error: `Your slot opens at ${fmtWhen(slot.slot_at)}. Come back then.` });
     if (Date.now() > slotWin.closeAt)
       return res.status(403).json({ error: 'You missed your slot window. Ask your teacher to reschedule you.' });
+  }
+
+  // Instructions screen: report what the student is about to sit, but don't
+  // create an attempt or start the clock until they click Begin.
+  if (preview) {
+    const agg = await get('SELECT COUNT(*) AS c, COALESCE(SUM(points), 0) AS marks FROM questions WHERE test_id = ? AND archived = 0', [a.test_id]);
+    res.json({
+      preview: true,
+      inProgress: !!attempt,
+      test,
+      questionCount: agg.c,
+      totalMarks: agg.marks,
+      durationMinutes: test.duration_minutes,
+      slotCloseAt: slotWin ? new Date(slotWin.closeAt).toISOString() : null,
+    });
+    return;
   }
 
   // Ensure an in-progress attempt exists so answers/position can be saved and

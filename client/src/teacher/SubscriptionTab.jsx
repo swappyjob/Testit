@@ -1,12 +1,14 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api.js';
 import { Msg } from '../components.jsx';
+import { useConfirm } from '../confirm.jsx';
 import { fmtPrice, fmtCap } from '../pages/AdminDashboard.jsx';
 
 // Root teachers can view their organization's plan and switch to another.
 // Non-root teachers see the plans but can't change them.
 // `embedded` renders without the big page card (e.g. inside the Profile dialog).
 export default function SubscriptionTab({ isRoot, embedded = false, onContact }) {
+  const confirm = useConfirm();
   const [data, setData] = useState(null); // { plan, studentCount, plans }
   const [msg, setMsg] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -15,7 +17,7 @@ export default function SubscriptionTab({ isRoot, embedded = false, onContact })
   useEffect(() => { load(); }, []);
 
   async function subscribe(p) {
-    if (!window.confirm(`Switch your organization to the ${p.name} plan (${fmtPrice(p)})?`)) return;
+    if (!(await confirm({ title: 'Switch plan?', body: `Switch your organization to the ${p.name} plan (${fmtPrice(p)})?`, confirmLabel: 'Switch plan' }))) return;
     setBusy(true); setMsg(null);
     try {
       await api('/api/my-org/plan', 'POST', { planId: p.id });

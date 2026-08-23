@@ -2,6 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import './styles.css';
+import { ConfirmProvider } from './confirm.jsx';
 
 import Login from './pages/Login.jsx';
 import Signup from './pages/Signup.jsx';
@@ -42,6 +43,7 @@ const homeLogin = {
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <BrowserRouter>
+      <ConfirmProvider>
       <Routes>
         <Route path="/" element={<Login {...homeLogin} />} />
         <Route path="/teacher-login" element={<Login {...teacherLogin} />} />
@@ -59,6 +61,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
         <Route path="/support" element={<SupportDashboard />} />
         <Route path="*" element={<Login {...homeLogin} />} />
       </Routes>
+      </ConfirmProvider>
     </BrowserRouter>
   </React.StrictMode>
 );

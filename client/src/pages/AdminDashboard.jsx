@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { api } from '../api.js';
 import { useRequireRole } from '../auth.js';
 import { DashboardBar, Modal, Msg, PasswordInput } from '../components.jsx';
+import { useConfirm } from '../confirm.jsx';
 
 export const fmtPrice = (p) =>
   p.price_monthly > 0 ? '₹' + p.price_monthly.toLocaleString('en-IN') + '/mo' : p.max_students == null ? 'Custom' : 'Free';
@@ -162,6 +163,7 @@ function SupportAgentsCard() {
 }
 
 function OrgCard({ org, plans, onChanged, onEditTeacher }) {
+  const confirm = useConfirm();
   const [renaming, setRenaming] = useState(false);
   const [name, setName] = useState(org.name);
   const [subUntil, setSubUntil] = useState(org.subscriptionUntil || '');
@@ -193,7 +195,7 @@ function OrgCard({ org, plans, onChanged, onEditTeacher }) {
     } catch (e) { setMsg({ ok: false, text: e.message }); }
   }
   async function toggle(t) {
-    if (!t.disabled && !window.confirm(`Disable ${t.name}? They will be logged out immediately and cannot log in until you re-enable them.`)) return;
+    if (!t.disabled && !(await confirm({ title: `Disable ${t.name}?`, body: 'They will be logged out immediately and cannot log in until you re-enable them.', confirmLabel: 'Disable', danger: true }))) return;
     try { await api('/api/admin/teachers/' + t.id, 'PATCH', { disabled: !t.disabled }); onChanged(); }
     catch (e) { setMsg({ ok: false, text: e.message }); }
   }

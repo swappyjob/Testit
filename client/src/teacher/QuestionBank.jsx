@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api.js';
 import { Msg, Modal } from '../components.jsx';
+import { useConfirm } from '../confirm.jsx';
 
 const TYPE_LABEL = { mcq: 'Single choice', multi: 'Multiple answers', truefalse: 'True / False', short: 'Short answer' };
 const parseCorrectSet = (raw) => { try { const a = JSON.parse(raw); return Array.isArray(a) ? a.map(Number) : []; } catch { return []; } };
@@ -48,13 +49,14 @@ function Filters({ filters, setFilters, topics }) {
 }
 
 export default function QuestionBank({ readOnly }) {
+  const confirm = useConfirm();
   const [filters, setFilters] = useState({ q: '', topic: '', type: '' });
   const [data, load] = useBank(filters);
   const [editing, setEditing] = useState(null); // editable question (+id) or { isNew:true }
   const [msg, setMsg] = useState(null);
 
   async function del(qid) {
-    if (!window.confirm('Delete this question from the bank?')) return;
+    if (!(await confirm({ title: 'Delete question?', body: 'Delete this question from the bank?', confirmLabel: 'Delete', danger: true }))) return;
     await api('/api/bank/' + qid, 'DELETE'); load();
   }
 

@@ -1,9 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
 import { api } from '../api.js';
 import { Msg, fmtDateTime } from '../components.jsx';
+import { useConfirm } from '../confirm.jsx';
 import { MathText } from '../mathText.jsx';
 
 export default function MyTests({ onEdit, onResumeDraft, onCreate, readOnly }) {
+  const confirm = useConfirm();
   const [tests, setTests] = useState(null);
   const [drafts, setDrafts] = useState([]);
   const [detail, setDetail] = useState(null); // { kind:'assign'|'results'|'attempt', test, attemptId }
@@ -14,7 +16,7 @@ export default function MyTests({ onEdit, onResumeDraft, onCreate, readOnly }) {
   useEffect(() => { load(); loadDrafts(); }, []);
 
   async function discardDraft(d) {
-    if (!window.confirm(`Discard draft "${d.title || 'Untitled test'}"? This can't be undone.`)) return;
+    if (!(await confirm({ title: 'Discard draft?', body: `Discard draft "${d.title || 'Untitled test'}"? This can't be undone.`, confirmLabel: 'Discard', danger: true }))) return;
     await api('/api/drafts/' + d.id, 'DELETE');
     loadDrafts();
   }
@@ -22,7 +24,7 @@ export default function MyTests({ onEdit, onResumeDraft, onCreate, readOnly }) {
   useEffect(() => { if (detail && detailRef.current) detailRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }, [detail]);
 
   async function del(t) {
-    if (!window.confirm(`Delete "${t.title}"? This removes its questions and results.`)) return;
+    if (!(await confirm({ title: 'Delete test?', body: `Delete "${t.title}"? This removes its questions and results.`, confirmLabel: 'Delete', danger: true }))) return;
     await api('/api/tests/' + t.id, 'DELETE');
     setDetail(null);
     load();
@@ -98,6 +100,7 @@ export default function MyTests({ onEdit, onResumeDraft, onCreate, readOnly }) {
 }
 
 function AssignPanel({ test, onChanged }) {
+  const confirm = useConfirm();
   const [students, setStudents] = useState(null);
   const [assigned, setAssigned] = useState(new Set());
   const [assignedRows, setAssignedRows] = useState([]);
@@ -114,7 +117,7 @@ function AssignPanel({ test, onChanged }) {
   }, []);
 
   async function reopenSlot(studentId) {
-    if (!window.confirm('Reopen slot booking for this student? Their current booking (and any unsubmitted attempt) is cleared so they can pick a new slot.')) return;
+    if (!(await confirm({ title: 'Reopen slot booking?', body: 'Their current booking (and any unsubmitted attempt) is cleared so they can pick a new slot.', confirmLabel: 'Reopen' }))) return;
     await api('/api/tests/' + test.id + '/reopen-slot', 'POST', { studentId });
     await reloadAssigned();
   }

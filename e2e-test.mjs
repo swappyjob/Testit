@@ -70,6 +70,14 @@ ok('test assigned to student');
 // 6. Student loads assignments + the test (should NOT expose correct answers)
 const { assignments } = await call(student, '/api/my-assignments');
 const assignmentId = assignments[0].assignmentId;
+
+// 6a. The instructions preview returns metadata only and must NOT start an attempt.
+const prev = await call(student, '/api/take/' + assignmentId + '?preview=1');
+if (!prev.preview || !(prev.questionCount >= 1) || prev.questions) throw new Error('preview should return instructions metadata only');
+if ((await call(student, '/api/my-assignments')).assignments.find((a) => a.assignmentId === assignmentId).started)
+  throw new Error('previewing the instructions must not start an attempt');
+ok('take preview returns instructions without starting the attempt/timer');
+
 const take = await call(student, '/api/take/' + assignmentId);
 if (JSON.stringify(take).includes('correct_answer')) throw new Error('correct answers leaked to student!');
 ok('student fetched test without answer leakage');

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { api } from '../api.js';
 import { Msg, Modal } from '../components.jsx';
+import { useConfirm } from '../confirm.jsx';
 
 export default function StudentsTab({ readOnly }) {
   const [students, setStudents] = useState(null);
@@ -198,12 +199,13 @@ function Field({ label, children }) {
 }
 
 function StudentDetail({ student: s, onBack, onChanged, readOnly }) {
+  const confirm = useConfirm();
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null); // { text, ok }
 
   async function toggle() {
-    if (!s.disabled && !window.confirm(`Disable ${s.name} in your organization? They'll lose access to your tests (any other institutes they belong to are unaffected). You can re-enable them anytime.`)) return;
+    if (!s.disabled && !(await confirm({ title: `Disable ${s.name}?`, body: "They'll lose access to your tests (any other institutes they belong to are unaffected). You can re-enable them anytime.", confirmLabel: 'Disable', danger: true }))) return;
     setBusy(true);
     try { await api('/api/students/' + s.studentId, 'PATCH', { disabled: !s.disabled }); await onChanged(); }
     catch (e) { setMsg({ text: e.message, ok: false }); } finally { setBusy(false); }

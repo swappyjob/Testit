@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { api } from '../api.js';
 import { Msg, DateTime12 } from '../components.jsx';
+import { useAlert } from '../confirm.jsx';
 import { BankPicker } from './QuestionBank.jsx';
 import { MathText } from '../mathText.jsx';
 import DrawingPad from './DrawingPad.jsx';
@@ -23,6 +24,7 @@ const blankQuestion = (type, points = 1) => ({
 // A resumable, one-question-per-page test builder. New tests auto-save as a
 // server draft; editing an existing test saves only on Publish.
 export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onCancel }) {
+  const alert = useAlert();
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [dueDate, setDueDate] = useState('');
