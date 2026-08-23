@@ -6,7 +6,7 @@ import { fmtPrice, fmtCap } from '../pages/AdminDashboard.jsx';
 // Root teachers can view their organization's plan and switch to another.
 // Non-root teachers see the plans but can't change them.
 // `embedded` renders without the big page card (e.g. inside the Profile dialog).
-export default function SubscriptionTab({ isRoot, embedded = false }) {
+export default function SubscriptionTab({ isRoot, embedded = false, onContact }) {
   const [data, setData] = useState(null); // { plan, studentCount, plans }
   const [msg, setMsg] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -48,6 +48,7 @@ export default function SubscriptionTab({ isRoot, embedded = false }) {
       {data.plans.map((p) => {
         const isCurrent = cur && cur.id === p.id;
         const tooSmall = p.max_students != null && data.studentCount > p.max_students;
+        const custom = p.max_students == null; // unlimited = custom / negotiated plan
         return (
           <div className="q-card" key={p.id} style={{ margin: 0, ...(isCurrent ? { border: '2px solid var(--brand)' } : {}) }}>
             <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
@@ -56,10 +57,17 @@ export default function SubscriptionTab({ isRoot, embedded = false }) {
             </div>
             <p style={{ fontSize: 22, fontWeight: 700, margin: '6px 0 2px' }}>{fmtPrice(p)}</p>
             <p className="muted" style={{ margin: '0 0 10px' }}>{fmtCap(p)}</p>
-            {isRoot && !isCurrent && (
-              <button className="btn small" disabled={busy || tooSmall} onClick={() => subscribe(p)}>
-                {tooSmall ? `Too small for ${data.studentCount} students` : 'Subscribe'}
-              </button>
+            {custom ? (
+              !isCurrent && <>
+                <p className="muted" style={{ fontSize: 13, margin: '0 0 10px' }}>Tailored to your size — get in touch to discuss terms and pricing.</p>
+                <button className="btn secondary small" onClick={() => (onContact ? onContact() : null)}>Contact us</button>
+              </>
+            ) : (
+              isRoot && !isCurrent && (
+                <button className="btn small" disabled={busy || tooSmall} onClick={() => subscribe(p)}>
+                  {tooSmall ? `Too small for ${data.studentCount} students` : 'Subscribe'}
+                </button>
+              )
             )}
           </div>
         );

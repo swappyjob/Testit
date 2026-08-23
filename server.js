@@ -745,6 +745,9 @@ app.post('/api/my-org/plan', requireRoot, h(async (req, res) => {
   const planId = Number(req.body.planId);
   const plan = await get('SELECT id, name, max_students FROM plans WHERE id = ?', [planId]);
   if (!plan) return res.status(400).json({ error: 'Invalid plan.' });
+  // Unlimited plans are custom/negotiated — not self-serve. Contact required.
+  if (plan.max_students == null)
+    return res.status(403).json({ error: 'That’s a custom plan — please contact us to set it up for your organization.' });
   const studentCount = (await get(
     "SELECT COUNT(*) AS c FROM signup_tokens WHERE invite_role = 'student' AND org_id = ?", [req.user.org_id]
   )).c;

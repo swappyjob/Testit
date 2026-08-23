@@ -41,6 +41,14 @@ if (!orgPlan.plan || orgPlan.plan.name !== 'Free') throw new Error('a new org sh
 if (orgPlan.plan.max_students !== 15) throw new Error('the Free plan should cap at 15 students, got: ' + orgPlan.plan.max_students);
 ok('new organization defaults to the Free plan (15-student cap)');
 
+// Unlimited/custom plans are not self-serve — a root teacher can't subscribe to one.
+const unlimited = orgPlan.plans.find((p) => p.max_students === null);
+if (unlimited) {
+  const r = await call(root, '/api/my-org/plan', 'POST', { planId: unlimited.id }, false);
+  if (r.status !== 403) throw new Error('subscribing to a custom/unlimited plan should be blocked (403), got ' + r.status);
+  ok('a custom/unlimited plan cannot be self-subscribed (403 — contact required)');
+}
+
 // While active, writes succeed.
 const created = await call(root, '/api/tests', 'POST', { title: 'Active', questions: Q });
 if (created.status !== 200) throw new Error('active org should be able to create a test');

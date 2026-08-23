@@ -101,7 +101,7 @@ export default function TeacherDashboard() {
         {tab === 'audit' && <AuditLogs />}
         {tab === 'support' && <SupportTickets />}
       </div>
-      {showProfile && <ProfileModal me={me} initialPane={profilePane} onClose={() => setShowProfile(false)} />}
+      {showProfile && <ProfileModal me={me} initialPane={profilePane} onClose={() => setShowProfile(false)} onContactSupport={() => { setShowProfile(false); setTab('support'); }} />}
     </>
   );
 }
@@ -143,7 +143,7 @@ function StatsBar({ onNavigate }) {
   );
 }
 
-function ProfileModal({ me, onClose, initialPane = 'account' }) {
+function ProfileModal({ me, onClose, initialPane = 'account', onContactSupport }) {
   // Only root teachers get the Subscription pane.
   const [pane, setPane] = useState(me.isRoot ? initialPane : 'account');
   const [cur, setCur] = useState('');
@@ -188,7 +188,7 @@ function ProfileModal({ me, onClose, initialPane = 'account' }) {
         </>
       )}
 
-      {pane === 'subscription' && <SubscriptionTab isRoot={me.isRoot} embedded />}
+      {pane === 'subscription' && <SubscriptionTab isRoot={me.isRoot} embedded onContact={onContactSupport} />}
     </Modal>
   );
 }
