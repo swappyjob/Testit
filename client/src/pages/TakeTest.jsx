@@ -46,6 +46,7 @@ export default function TakeTest() {
   const [confirmSubmit, setConfirmSubmit] = useState(false); // in-app submit confirmation
   const [marked, setMarked] = useState(() => new Set());   // question ids flagged for review
   const [visited, setVisited] = useState(() => new Set()); // question indices seen at least once
+  const [paletteOpen, setPaletteOpen] = useState(true);    // palette panel expanded?
   const submitting = useRef(false);
   const intervalRef = useRef(null);
 
@@ -344,8 +345,57 @@ export default function TakeTest() {
           )}
         </div>
 
-        <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-        <div style={{ flex: '3 1 420px', minWidth: 0 }}>
+        {/* Question palette — full width above the question so the question
+            keeps the whole reading width. Collapsible; the number grid scrolls
+            internally so a 100-question paper never dominates the page. */}
+        <div className="card">
+          <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <div className="row" style={{ gap: 10, alignItems: 'baseline', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 16, fontWeight: 700 }}>🧭 Question palette</span>
+              <span className="muted" style={{ fontSize: 13 }}><b>{answeredCount}</b> answered · <b>{markedCount}</b> marked · <b>{blankCount}</b> left</span>
+            </div>
+            <div className="row" style={{ gap: 8 }}>
+              <button className="btn secondary small" type="button" aria-expanded={paletteOpen} onClick={() => setPaletteOpen((o) => !o)}>
+                {paletteOpen ? '▲ Hide grid' : '▼ Show all questions'}
+              </button>
+              <button className="btn small" type="button" onClick={() => setConfirmSubmit(true)}>Submit test</button>
+            </div>
+          </div>
+          {paletteOpen && (
+            <>
+              <p className="muted" style={{ margin: '8px 0 0', fontSize: 13 }}>
+                👆 Tap any number to jump straight to that question — they're colour-coded by your progress (see key below).
+              </p>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10, maxHeight: 168, overflowY: 'auto', paddingRight: 4 }}>
+                {questions.map((qq, i) => {
+                  const st = statusOf(i);
+                  const c = PAL[st];
+                  const isCur = i === current;
+                  return (
+                    <button key={qq.id} type="button" onClick={() => setCurrent(i)}
+                      title={`Q${i + 1} — ${c.label}`}
+                      style={{ position: 'relative', width: 38, height: 38, flex: '0 0 auto', borderRadius: 8, fontWeight: 700, cursor: 'pointer',
+                        background: c.bg, color: c.fg, border: isCur ? '3px solid #111827' : '1px solid rgba(0,0,0,.12)' }}>
+                      {i + 1}
+                      {st === 'answered-marked' && (
+                        <span style={{ position: 'absolute', top: -4, right: -4, width: 13, height: 13, borderRadius: '50%', background: '#16a34a', border: '2px solid #fff' }} />
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+              <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--line)', display: 'flex', flexWrap: 'wrap', gap: '6px 16px', fontSize: 12 }}>
+                {['answered', 'not-answered', 'marked', 'answered-marked', 'not-visited'].map((k) => (
+                  <div key={k} className="row" style={{ gap: 6, alignItems: 'center' }}>
+                    <span style={{ width: 15, height: 15, borderRadius: 4, background: PAL[k].bg, border: '1px solid rgba(0,0,0,.12)', display: 'inline-block' }} />
+                    <span className="muted">{PAL[k].label}</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+
         <div className="q-card">
           {q.section && <div className="pill brand" style={{ marginBottom: 8 }}>{q.section}</div>}
           <h3>Q{current + 1}. <MathText text={q.prompt} /> <span className="muted">({q.points} pt)</span>
@@ -392,50 +442,9 @@ export default function TakeTest() {
               : <button className="btn" type="button" onClick={() => setCurrent((c) => Math.min(questions.length - 1, c + 1))}>Next →</button>}
           </div>
           <p className="muted" style={{ margin: '10px 0 0', fontSize: 13 }}>
-            Jump to any question from the palette. Your answers are kept as you navigate. You can only submit once.
+            Jump to any question from the palette above. Your answers are kept as you navigate. You can only submit once.
           </p>
         </div>
-        </div>{/* end question column */}
-
-        {/* Question palette — jump anywhere, see what's answered / marked. */}
-        <div style={{ flex: '1 1 220px', minWidth: 0 }}>
-          <div className="card" style={{ position: 'sticky', top: 12 }}>
-            <h3 style={{ marginTop: 0, fontSize: 16 }}>Questions</h3>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-              {questions.map((qq, i) => {
-                const st = statusOf(i);
-                const c = PAL[st];
-                const isCur = i === current;
-                return (
-                  <button key={qq.id} type="button" onClick={() => setCurrent(i)}
-                    title={`Q${i + 1} — ${c.label}`}
-                    style={{ position: 'relative', width: 38, height: 38, borderRadius: 8, fontWeight: 700, cursor: 'pointer',
-                      background: c.bg, color: c.fg, border: isCur ? '3px solid #111827' : '1px solid rgba(0,0,0,.12)' }}>
-                    {i + 1}
-                    {st === 'answered-marked' && (
-                      <span style={{ position: 'absolute', top: -4, right: -4, width: 13, height: 13, borderRadius: '50%', background: '#16a34a', border: '2px solid #fff' }} />
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-            <div style={{ marginTop: 14, display: 'grid', gap: 6, fontSize: 12 }}>
-              {['answered', 'not-answered', 'marked', 'answered-marked', 'not-visited'].map((k) => (
-                <div key={k} className="row" style={{ gap: 8, alignItems: 'center' }}>
-                  <span style={{ width: 16, height: 16, borderRadius: 4, background: PAL[k].bg, border: '1px solid rgba(0,0,0,.12)', display: 'inline-block' }} />
-                  <span className="muted">{PAL[k].label}</span>
-                </div>
-              ))}
-            </div>
-            <p className="muted" style={{ margin: '12px 0 0', fontSize: 13 }}>
-              <b>{answeredCount}</b> answered · <b>{markedCount}</b> marked · <b>{blankCount}</b> left
-            </p>
-            {last
-              ? <button className="btn" type="button" style={{ marginTop: 12, width: '100%' }} onClick={() => setConfirmSubmit(true)}>Submit test</button>
-              : <button className="btn secondary" type="button" style={{ marginTop: 12, width: '100%' }} onClick={() => setConfirmSubmit(true)}>Submit test</button>}
-          </div>
-        </div>
-        </div>{/* end question + palette row */}
       </div>
 
       {confirmSubmit && (
