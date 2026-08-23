@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { api } from '../api.js';
-import { Msg, DateTime12 } from '../components.jsx';
+import { Msg, DateTime12, InfoTip } from '../components.jsx';
 import { useAlert } from '../confirm.jsx';
 import { BankPicker } from './QuestionBank.jsx';
 import { MathText } from '../mathText.jsx';
@@ -42,6 +42,7 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
   const [questions, setQuestions] = useState([blankQuestion('mcq', 1)]);
   const [page, setPage] = useState(0); // 0 = details, 1..N = questions, N+1 = review
   const [msg, setMsg] = useState('');
+  const [showErrors, setShowErrors] = useState(false); // highlight missing required fields
   const [draftId, setDraftId] = useState(propDraftId || null);
   const [ready, setReady] = useState(false);
   const [savedAt, setSavedAt] = useState(null);
@@ -198,6 +199,16 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
       return q;
     });
   }
+  // Which required test-details fields are missing/invalid.
+  function invalidFields() {
+    const e = {};
+    if (!title.trim()) e.title = true;
+    const dur = Number(durationMinutes);
+    if (!Number.isFinite(dur) || dur < 1) e.duration = true;
+    const dp = Number(defaultPoints);
+    if (!Number.isFinite(dp) || dp < 1) e.points = true;
+    return e;
+  }
   function buildPayload() {
     return {
       title, description, dueDate, startsAt,
@@ -210,6 +221,7 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
     };
   }
   async function publish() {
+    if (Object.keys(invalidFields()).length) { setShowErrors(true); setPage(0); setMsg('Please complete the required fields marked in red.'); return; }
     setMsg('');
     try {
       if (editId) await api('/api/tests/' + editId, 'PUT', buildPayload());
@@ -238,6 +250,10 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
   const onReview = page === total + 1;
   const qIndex = onHeader || onReview ? -1 : page - 1;
   const q = qIndex >= 0 ? questions[qIndex] : null;
+  // Required-field highlighting (only after a failed Next / Publish).
+  const invalid = showErrors ? invalidFields() : {};
+  const errBorder = (on) => (on ? { borderColor: '#dc2626', boxShadow: '0 0 0 3px rgba(220,38,38,.15)' } : {});
+  const RequiredNote = ({ show }) => (show ? <div style={{ color: '#dc2626', fontSize: 12, marginTop: 4 }}>This field is required.</div> : null);
 
   return (
     <div className="card">
@@ -259,60 +275,80 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
       {/* ---------------- DETAILS PAGE ---------------- */}
       {onHeader && (
         <>
-          <label>Test title</label>
-          <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Chapter 1 Quiz" />
-          <label>Description (optional)</label>
+          <label>Test title <span style={{ color: '#dc2626' }}>*</span> <InfoTip text="The name students see for this test — e.g. 'Chapter 1 Quiz' or 'JEE Mock Test 1'. Required." /></label>
+          <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Chapter 1 Quiz" style={errBorder(invalid.title)} />
+          <RequiredNote show={invalid.title} />
+          <label>Description (optional) <InfoTip text="Instructions shown to students before they begin — syllabus covered, rules, anything they should know. Leave blank if not needed." /></label>
           <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Instructions for students..." />
 
-          <label>Start date &amp; time (optional — when the test opens)</label>
-          <DateTime12 value={startsAt} onChange={setStartsAt} />
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+            <div style={{ flex: '1 1 240px', minWidth: 0 }}>
+              <label>Start date &amp; time <InfoTip text="Optional. Students can't begin the test before this moment. Leave blank to open it as soon as it's assigned." /></label>
+              <DateTime12 value={startsAt} onChange={setStartsAt} />
+            </div>
+            <div style={{ flex: '1 1 240px', minWidth: 0 }}>
+              <label>End date &amp; time <InfoTip text="Optional deadline. After this moment the test closes — it can no longer be started or submitted. Leave blank for no deadline." /></label>
+              <DateTime12 value={dueDate} onChange={setDueDate} />
+            </div>
+          </div>
 
-          <label>End date &amp; time (optional deadline)</label>
-          <DateTime12 value={dueDate} onChange={setDueDate} />
-
-          <label>Time limit in minutes (optional timer)</label>
-          <input type="number" min="0" step="1" value={durationMinutes} onChange={(e) => setDurationMinutes(e.target.value)} placeholder="0 = no timer" style={{ width: 180 }} />
-
-          <label>Default marks per question</label>
-          <input type="number" min="1" step="1" value={defaultPoints} onChange={(e) => changeDefaultPoints(e.target.value)} style={{ width: 140 }} />
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 4 }}>
+            <div style={{ flex: '1 1 240px', minWidth: 0 }}>
+              <label>Time limit in minutes <span style={{ color: '#dc2626' }}>*</span> <InfoTip text="Countdown timer for the test. It auto-submits when time runs out. Required — enter the number of minutes (e.g. 60)." /></label>
+              <input type="number" min="1" step="1" value={durationMinutes} onChange={(e) => setDurationMinutes(e.target.value)} placeholder="e.g. 60" style={{ width: '100%', ...errBorder(invalid.duration) }} />
+              <RequiredNote show={invalid.duration} />
+            </div>
+            <div style={{ flex: '1 1 240px', minWidth: 0 }}>
+              <label>Default marks per question <span style={{ color: '#dc2626' }}>*</span> <InfoTip text="The marks a newly added question starts with. You can still change any individual question's marks later. Required." /></label>
+              <input type="number" min="1" step="1" value={defaultPoints} onChange={(e) => changeDefaultPoints(e.target.value)} style={{ width: '100%', ...errBorder(invalid.points) }} />
+              <RequiredNote show={invalid.points} />
+            </div>
+          </div>
           <p className="muted" style={{ fontSize: 13, margin: '6px 0 0' }}>New questions use this value; you can still change an individual question's marks.</p>
 
-          <div className="q-card" style={{ marginTop: 16 }}>
-            <label className="choice" style={{ fontWeight: 600 }}>
-              <input type="checkbox" checked={negativeMarking} onChange={(e) => setNegativeMarking(e.target.checked)} />
-              Enable negative marking (deduct marks for wrong answers)
-            </label>
-            {negativeMarking && (
-              <div style={{ marginTop: 8 }}>
-                <label>Marks deducted per wrong answer</label>
-                <input type="number" min="1" step="1" value={penalty} onChange={(e) => setPenalty(Number(e.target.value) || 1)} style={{ width: 120 }} />
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 16, alignItems: 'flex-start' }}>
+            <div className="q-card" style={{ flex: '1 1 300px', minWidth: 0, margin: 0 }}>
+              <div className="row" style={{ alignItems: 'center', gap: 6 }}>
+                <label className="choice" style={{ fontWeight: 600, margin: 0 }}>
+                  <input type="checkbox" checked={negativeMarking} onChange={(e) => setNegativeMarking(e.target.checked)} />
+                  Enable negative marking (deduct marks for wrong answers)
+                </label>
+                <InfoTip label="How negative marking works" text="Subtracts marks for wrong multiple-choice, multiple-answer and true/false answers. Leaving a question blank is never penalised. Short answers aren't affected." />
               </div>
-            )}
+              {negativeMarking && (
+                <div style={{ marginTop: 8 }}>
+                  <label>Marks deducted per wrong answer <InfoTip text="How many marks to subtract for each wrong objective answer (e.g. 1 mark)." /></label>
+                  <input type="number" min="1" step="1" value={penalty} onChange={(e) => setPenalty(Number(e.target.value) || 1)} style={{ width: 120 }} />
+                </div>
+              )}
+            </div>
+
+            <div className="q-card" style={{ flex: '1 1 300px', minWidth: 0, margin: 0 }}>
+              <div className="row" style={{ alignItems: 'center', gap: 6 }}>
+                <label className="choice" style={{ fontWeight: 600, margin: 0 }}>
+                  <input type="checkbox" checked={proctored} onChange={(e) => setProctored(e.target.checked)} />
+                  🔒 Enable proctoring (fullscreen + anti-cheating monitoring)
+                </label>
+                <InfoTip label="How proctoring works" text="Runs the test in fullscreen and flags cheating — leaving fullscreen, switching tabs, and copy/paste are all recorded. Too many violations auto-submit the test." />
+              </div>
+              {proctored && (
+                <div style={{ marginTop: 8 }}>
+                  <label>Auto-submit after this many violations <InfoTip text="How many violations a student is allowed before the test is automatically submitted for them." /></label>
+                  <input type="number" min="1" step="1" value={maxViolations} onChange={(e) => setMaxViolations(Number(e.target.value) || 1)} style={{ width: 120 }} />
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="q-card" style={{ marginTop: 16 }}>
-            <label className="choice" style={{ fontWeight: 600 }}>
-              <input type="checkbox" checked={proctored} onChange={(e) => setProctored(e.target.checked)} />
-              🔒 Enable proctoring (fullscreen + anti-cheating monitoring)
-            </label>
-            {proctored && (
-              <div style={{ marginTop: 8 }}>
-                <label>Auto-submit after this many violations</label>
-                <input type="number" min="1" step="1" value={maxViolations} onChange={(e) => setMaxViolations(Number(e.target.value) || 1)} style={{ width: 120 }} />
-              </div>
-            )}
-          </div>
-
-          <div className="q-card" style={{ marginTop: 16 }}>
-            <label className="choice" style={{ fontWeight: 600 }}>
-              <input type="checkbox" checked={requiresSlot} onChange={(e) => setRequiresSlot(e.target.checked)} />
-              🗓 Students book a time slot to appear
-            </label>
-            <p className="muted" style={{ fontSize: 13, margin: '4px 0 0' }}>
-              Add the slots you want to offer; each student picks one and can only enter during that window.
-              The window opens 30&nbsp;min before the slot and closes 30&nbsp;min after the slot plus the test's duration
-              (so a short connection drop won't lock them out). Needs a time limit set above.
-            </p>
+            <div className="row" style={{ alignItems: 'center', gap: 6 }}>
+              <label className="choice" style={{ fontWeight: 600, margin: 0 }}>
+                <input type="checkbox" checked={requiresSlot} onChange={(e) => setRequiresSlot(e.target.checked)} />
+                🗓 Students book a time slot to appear
+              </label>
+              <InfoTip label="How slot booking works"
+                text="Add the slots you want to offer; each student picks one and can only enter during that window. It opens 30 min before the slot and closes 30 min after the slot plus the test's duration, so a short connection drop won't lock them out. Needs a time limit set above." />
+            </div>
             {requiresSlot && (
               <div style={{ marginTop: 12 }}>
                 {!(Number(durationMinutes) > 0) && (
@@ -335,7 +371,7 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
           </div>
 
           <div className="q-card" style={{ marginTop: 16 }}>
-            <label style={{ fontWeight: 600 }}>Sections (optional)</label>
+            <label style={{ fontWeight: 600 }}>Sections (optional) <InfoTip text="Optionally group questions into named sections (e.g. Physics, Chemistry, Maths). Students then get a section-wise score breakdown. Assign a section per question on its page." /></label>
             <p className="muted" style={{ fontSize: 13, margin: '2px 0 8px' }}>Group questions (e.g. Quantitative Aptitude, Physics), then pick a section per question.</p>
             <div className="row" style={{ gap: 8 }}>
               <input type="text" value={newSection} onChange={(e) => setNewSection(e.target.value)}
@@ -500,7 +536,10 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
           {(q || onReview) && <button className="btn secondary" type="button" onClick={addQuestion}>+ Add question</button>}
           {onReview
             ? <button className="btn" type="button" onClick={publish}>{editId ? 'Save changes' : 'Publish test'}</button>
-            : <button className="btn" type="button" onClick={() => { autoSaveOnNext(); setPage((p) => Math.min(total + 1, p + 1)); }}>{page === total ? 'Review →' : 'Next →'}</button>}
+            : <button className="btn" type="button" onClick={() => {
+                if (onHeader && Object.keys(invalidFields()).length) { setShowErrors(true); setMsg('Please complete the required fields marked in red.'); return; }
+                setMsg(''); autoSaveOnNext(); setPage((p) => Math.min(total + 1, p + 1));
+              }}>{page === total ? 'Review →' : 'Next →'}</button>}
         </div>
       </div>
 

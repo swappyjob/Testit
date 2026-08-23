@@ -4,7 +4,7 @@ import { Msg, fmtDateTime } from '../components.jsx';
 import { useConfirm } from '../confirm.jsx';
 import { MathText } from '../mathText.jsx';
 
-export default function MyTests({ onEdit, onResumeDraft, onCreate, readOnly }) {
+export default function MyTests({ onEdit, onResumeDraft, onCreate, readOnly, openResultsFor, onResultsOpened }) {
   const confirm = useConfirm();
   const [tests, setTests] = useState(null);
   const [drafts, setDrafts] = useState([]);
@@ -14,6 +14,14 @@ export default function MyTests({ onEdit, onResumeDraft, onCreate, readOnly }) {
   const load = () => api('/api/tests').then((d) => setTests(d.tests));
   const loadDrafts = () => api('/api/drafts').then((d) => setDrafts(d.drafts)).catch(() => {});
   useEffect(() => { load(); loadDrafts(); }, []);
+
+  // Deep-link from the Home tab: open a specific test's Results panel once loaded.
+  useEffect(() => {
+    if (!openResultsFor || !tests) return;
+    const t = tests.find((x) => x.id === openResultsFor);
+    if (t) setDetail({ kind: 'results', test: t });
+    onResultsOpened && onResultsOpened();
+  }, [openResultsFor, tests]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function discardDraft(d) {
     if (!(await confirm({ title: 'Discard draft?', body: `Discard draft "${d.title || 'Untitled test'}"? This can't be undone.`, confirmLabel: 'Discard', danger: true }))) return;

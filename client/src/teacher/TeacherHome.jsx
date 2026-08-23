@@ -27,7 +27,7 @@ function ago(s) {
 }
 const Icon = ({ d }) => <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{d}</svg>;
 
-export default function TeacherHome({ me, onCreate, onNavigate, readOnly }) {
+export default function TeacherHome({ me, onCreate, onNavigate, onOpenResults, readOnly }) {
   const [s, setS] = useState(null);
   const [activity, setActivity] = useState(null);
 
@@ -93,7 +93,7 @@ export default function TeacherHome({ me, onCreate, onNavigate, readOnly }) {
           {!s ? <p className="muted">Loading…</p> : s.recentTests && s.recentTests.length ? s.recentTests.map((t) => (
             <div key={t.id} className="row" style={{ justifyContent: 'space-between', alignItems: 'center', padding: '10px 0', borderTop: '1px solid var(--line)' }}>
               <div><div style={{ fontWeight: 600 }}>{t.title}</div><div className="muted" style={{ fontSize: 12 }}>{t.submitted} submitted{t.assigned ? ` of ${t.assigned}` : ''}{t.closed ? ' · closed' : ''}</div></div>
-              <button className="btn secondary small" onClick={() => onNavigate('tests')}>Results</button>
+              <button className="btn secondary small" onClick={() => onOpenResults(t.id)}>Results</button>
             </div>
           )) : <p className="muted">No tests yet. Create your first one above.</p>}
         </div>

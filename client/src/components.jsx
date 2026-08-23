@@ -55,6 +55,26 @@ export function PasswordInput(props) {
   );
 }
 
+// A small "ⓘ" affordance that reveals help text on hover, focus, or tap.
+// Keeps long explanations out of the way until the user wants them.
+export function InfoTip({ text, label = 'More information' }) {
+  const [show, setShow] = useState(false);
+  return (
+    <span style={{ position: 'relative', display: 'inline-flex', verticalAlign: 'middle' }}
+      onMouseEnter={() => setShow(true)} onMouseLeave={() => setShow(false)}>
+      <button type="button" aria-label={label} title=""
+        onClick={(e) => { e.preventDefault(); e.stopPropagation(); setShow(true); }}
+        onFocus={() => setShow(true)} onBlur={() => setShow(false)}
+        style={{ width: 18, height: 18, borderRadius: '50%', border: '1px solid #c7d2fe', background: '#eef2ff', color: '#3730a3', fontSize: 12, fontWeight: 700, fontStyle: 'italic', lineHeight: 1, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0 }}>i</button>
+      {show && (
+        <span role="tooltip" style={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 40, width: 260, maxWidth: '70vw', background: '#111827', color: '#fff', padding: '8px 10px', borderRadius: 8, fontSize: 12, fontWeight: 400, fontStyle: 'normal', lineHeight: 1.5, boxShadow: '0 8px 24px rgba(0,0,0,.28)' }}>
+          {text}
+        </span>
+      )}
+    </span>
+  );
+}
+
 // Modal overlay; closes on backdrop click or the ✕ button. `wide` widens it.
 export function Modal({ title, onClose, children, wide = false }) {
   const backdrop = useRef(null);

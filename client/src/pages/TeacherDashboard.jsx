@@ -17,6 +17,7 @@ export default function TeacherDashboard() {
   const [tab, setTab] = useState('home');
   const [editTestId, setEditTestId] = useState(null);
   const [draftId, setDraftId] = useState(null);
+  const [resultsFor, setResultsFor] = useState(null); // open this test's results in My Tests
   const [showProfile, setShowProfile] = useState(false);
   const [profilePane, setProfilePane] = useState('account');
   const [orgPlan, setOrgPlan] = useState(null); // { plan, studentCount, plans }
@@ -92,8 +93,8 @@ export default function TeacherDashboard() {
           <Tab id="audit" label="Audit Logs" icon="📜" />
           <Tab id="support" label="Support" icon="🎫" />
         </div>
-        {tab === 'home' && <TeacherHome me={me} onCreate={openCreate} onNavigate={setTab} readOnly={readOnly} />}
-        {tab === 'tests' && <MyTests onEdit={openEdit} onResumeDraft={openDraft} onCreate={openCreate} readOnly={readOnly} />}
+        {tab === 'home' && <TeacherHome me={me} onCreate={openCreate} onNavigate={setTab} onOpenResults={(id) => { setResultsFor(id); setTab('tests'); }} readOnly={readOnly} />}
+        {tab === 'tests' && <MyTests onEdit={openEdit} onResumeDraft={openDraft} onCreate={openCreate} readOnly={readOnly} openResultsFor={resultsFor} onResultsOpened={() => setResultsFor(null)} />}
         {tab === 'create' && !readOnly && <TestBuilder key={editTestId ? 'e' + editTestId : draftId ? 'd' + draftId : 'new'} editId={editTestId} draftId={draftId} onSaved={afterSave} onCancel={cancelBuild} />}
         {tab === 'students' && <StudentsTab readOnly={readOnly} />}
         {tab === 'teachers' && <TeachersTab readOnly={readOnly} />}
