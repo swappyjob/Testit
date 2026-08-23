@@ -26,6 +26,9 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [dueDate, setDueDate] = useState('');
+  const [startsAt, setStartsAt] = useState('');
+  const [requiresSlot, setRequiresSlot] = useState(false);
+  const [slots, setSlots] = useState([]); // { id?, at, capacity }
   const [durationMinutes, setDurationMinutes] = useState('');
   const [negativeMarking, setNegativeMarking] = useState(false);
   const [penalty, setPenalty] = useState(1);
@@ -52,10 +55,12 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
   useEffect(() => {
     let alive = true;
     async function loadEdit() {
-      const { test, questions: qs } = await api('/api/tests/' + editId);
+      const { test, questions: qs, slots: sl } = await api('/api/tests/' + editId);
       if (!alive) return;
       setTitle(test.title); setDescription(test.description || '');
       setDueDate(test.due_date || ''); setDurationMinutes(test.duration_minutes || '');
+      setStartsAt(test.starts_at || ''); setRequiresSlot(!!test.requires_slot);
+      setSlots(Array.isArray(sl) ? sl.map((s) => ({ id: s.id, at: s.at, capacity: s.capacity })) : []);
       setNegativeMarking(!!test.negative_marking); setPenalty(test.penalty > 0 ? test.penalty : 1);
       setProctored(!!test.proctored); setMaxViolations(test.max_violations > 0 ? test.max_violations : 3);
       const mapped = qs.map((q) => ({
@@ -76,6 +81,8 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
       let s = {}; try { s = JSON.parse(d.data); } catch { /* ignore */ }
       setTitle(s.title || ''); setDescription(s.description || '');
       setDueDate(s.dueDate || ''); setDurationMinutes(s.durationMinutes || '');
+      setStartsAt(s.startsAt || ''); setRequiresSlot(!!s.requiresSlot);
+      setSlots(Array.isArray(s.slots) ? s.slots : []);
       setNegativeMarking(!!s.negativeMarking); setPenalty(s.penalty > 0 ? s.penalty : 1);
       setProctored(!!s.proctored); setMaxViolations(s.maxViolations > 0 ? s.maxViolations : 3);
       setDefaultPoints(s.defaultPoints > 0 ? s.defaultPoints : 1);
@@ -91,9 +98,9 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
   }, [editId, propDraftId]);
 
   // ---- Auto-save (new/draft only), debounced, only after a real change ----
-  const snapshot = JSON.stringify({ title, description, dueDate, durationMinutes, negativeMarking, penalty, proctored, maxViolations, defaultPoints, sections, questions, page });
+  const snapshot = JSON.stringify({ title, description, dueDate, startsAt, requiresSlot, slots, durationMinutes, negativeMarking, penalty, proctored, maxViolations, defaultPoints, sections, questions, page });
   // Content only (no page) — used to dismiss the edit-mode "Saved" tick on real edits, not on navigation.
-  const contentSnap = JSON.stringify({ title, description, dueDate, durationMinutes, negativeMarking, penalty, proctored, maxViolations, sections, questions });
+  const contentSnap = JSON.stringify({ title, description, dueDate, startsAt, requiresSlot, slots, durationMinutes, negativeMarking, penalty, proctored, maxViolations, sections, questions });
   async function saveDraft() {
     if (savingRef.current) return;
     savingRef.current = true;
@@ -161,6 +168,9 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
       return n;
     });
   }
+  const addSlot = () => setSlots((sl) => [...sl, { at: '', capacity: 0 }]);
+  const updateSlot = (i, patch) => setSlots((sl) => sl.map((s, idx) => (idx === i ? { ...s, ...patch } : s)));
+  const removeSlot = (i) => setSlots((sl) => sl.filter((_, idx) => idx !== i));
   function addSection() { const name = newSection.trim(); if (name && !sections.includes(name)) setSections((s) => [...s, name]); setNewSection(''); }
   function removeSection(name) { setSections((s) => s.filter((x) => x !== name)); setQuestions((qs) => qs.map((q) => (q.section === name ? { ...q, section: '' } : q))); }
   // Save a PNG drawn on the pad: upload it and attach as the question image.
@@ -188,8 +198,10 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
   }
   function buildPayload() {
     return {
-      title, description, dueDate,
+      title, description, dueDate, startsAt,
       durationMinutes: Number(durationMinutes) || 0,
+      requiresSlot,
+      slots: requiresSlot ? slots.filter((s) => s.at).map((s) => ({ id: s.id, at: s.at, capacity: Number(s.capacity) || 0 })) : [],
       negativeMarking, penalty,
       proctored, maxViolations: Number(maxViolations) || 3,
       questions: cleanQuestions(),
@@ -250,6 +262,9 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
           <label>Description (optional)</label>
           <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Instructions for students..." />
 
+          <label>Start date &amp; time (optional — when the test opens)</label>
+          <DateTime12 value={startsAt} onChange={setStartsAt} />
+
           <label>End date &amp; time (optional deadline)</label>
           <DateTime12 value={dueDate} onChange={setDueDate} />
 
@@ -282,6 +297,37 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
               <div style={{ marginTop: 8 }}>
                 <label>Auto-submit after this many violations</label>
                 <input type="number" min="1" step="1" value={maxViolations} onChange={(e) => setMaxViolations(Number(e.target.value) || 1)} style={{ width: 120 }} />
+              </div>
+            )}
+          </div>
+
+          <div className="q-card" style={{ marginTop: 16 }}>
+            <label className="choice" style={{ fontWeight: 600 }}>
+              <input type="checkbox" checked={requiresSlot} onChange={(e) => setRequiresSlot(e.target.checked)} />
+              🗓 Students book a time slot to appear
+            </label>
+            <p className="muted" style={{ fontSize: 13, margin: '4px 0 0' }}>
+              Add the slots you want to offer; each student picks one and can only enter during that window.
+              The window opens 30&nbsp;min before the slot and closes 30&nbsp;min after the slot plus the test's duration
+              (so a short connection drop won't lock them out). Needs a time limit set above.
+            </p>
+            {requiresSlot && (
+              <div style={{ marginTop: 12 }}>
+                {!(Number(durationMinutes) > 0) && (
+                  <p className="pill amber" style={{ display: 'inline-block' }}>Set a time limit above so each slot has a window.</p>
+                )}
+                {slots.length === 0 && <p className="muted" style={{ fontSize: 13 }}>No slots yet — add at least one.</p>}
+                {slots.map((s, i) => (
+                  <div key={i} className="row" style={{ gap: 8, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
+                    <div style={{ flex: '1 1 260px' }}><DateTime12 value={s.at} onChange={(v) => updateSlot(i, { at: v })} /></div>
+                    <label className="muted" style={{ fontSize: 13, margin: 0 }}>Seats
+                      <input type="number" min="0" step="1" value={s.capacity} onChange={(e) => updateSlot(i, { capacity: Number(e.target.value) || 0 })}
+                        title="0 = unlimited" placeholder="0 = ∞" style={{ width: 90, marginLeft: 6 }} />
+                    </label>
+                    <button className="btn danger small" type="button" onClick={() => removeSlot(i)}>Remove</button>
+                  </div>
+                ))}
+                <button className="btn secondary small" type="button" onClick={addSlot}>+ Add slot</button>
               </div>
             )}
           </div>

@@ -197,6 +197,9 @@ function describeTestChanges({ old, now }) {
   if (now.title !== old.title) out.push(`Renamed to "${now.title}"`);
   if (now.description !== old.description) out.push(now.description ? 'Updated description' : 'Cleared description');
   if (now.dueDate !== old.dueDate) out.push(now.dueDate ? `Changed deadline to ${now.dueDate}` : 'Removed deadline');
+  if (now.startsAt !== old.startsAt) out.push(now.startsAt ? `Set start date to ${now.startsAt}` : 'Removed start date');
+  if (now.requiresSlot !== old.requiresSlot) out.push(now.requiresSlot ? 'Enabled slot booking' : 'Disabled slot booking');
+  else if (now.requiresSlot && now.slotCount !== old.slotCount) out.push(`Changed to ${now.slotCount} time slot${now.slotCount === 1 ? '' : 's'}`);
   if (now.duration !== old.duration) out.push(now.duration ? `Set timer to ${now.duration} min` : 'Removed timer');
   if (now.negative_marking !== old.negative_marking || now.penalty !== old.penalty)
     out.push(now.negative_marking ? `Enabled negative marking (${now.penalty})` : 'Disabled negative marking');
@@ -1280,6 +1283,81 @@ function readProctoring(body) {
   return { proctored, maxViolations: Number.isFinite(n) && n >= 1 ? n : 3 };
 }
 
+// ---- Scheduled windows & booked time slots --------------------------------
+// Optional start date — like readDueDate but for when a test opens.
+function readStartDate(body) {
+  const d = (body.startsAt || '').trim();
+  if (!d) return '';
+  return Number.isFinite(new Date(d).getTime()) ? d : '';
+}
+// Human-friendly rendering of a datetime-local string for error messages.
+function fmtWhen(s) {
+  const t = new Date(s).getTime();
+  if (!Number.isFinite(t)) return String(s || '');
+  try {
+    return new Date(t).toLocaleString('en-IN', {
+      weekday: 'short', day: 'numeric', month: 'short',
+      hour: 'numeric', minute: '2-digit', hour12: true,
+    });
+  } catch { return String(s || ''); }
+}
+// A slot's enter window tolerates internet issues: it opens 30 min before the
+// slot and closes 30 min after the slot plus the test's full duration.
+const SLOT_BUFFER_MS = 30 * 60 * 1000;
+function slotWindow(slotAt, durationMinutes) {
+  const start = new Date(slotAt).getTime();
+  if (!Number.isFinite(start)) return null;
+  const dur = (Number(durationMinutes) || 0) * 60 * 1000;
+  return { openAt: start - SLOT_BUFFER_MS, closeAt: start + dur + SLOT_BUFFER_MS };
+}
+// True when a test has a start date that is still in the future.
+function notYetOpen(startsAt) {
+  if (!startsAt) return false;
+  const t = new Date(startsAt).getTime();
+  return Number.isFinite(t) && t > Date.now();
+}
+// Keep only valid slots ({ id?, at, capacity }); drop rows without a real date.
+function normalizeSlots(raw) {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (const s of raw) {
+    const at = String((s && s.at) || '').trim();
+    if (!at || !Number.isFinite(new Date(at).getTime())) continue;
+    const cap = Math.max(0, Math.round(Number(s.capacity)) || 0);
+    const id = s && s.id ? Number(s.id) : null;
+    out.push({ id: Number.isFinite(id) ? id : null, at, capacity: cap });
+  }
+  return out;
+}
+// Slot booking is optional, but when it's on the setup must make sense.
+function validateSlotSetup(requiresSlot, slots, duration) {
+  if (!requiresSlot) return null;
+  if (!Array.isArray(slots) || slots.length === 0)
+    return 'Add at least one time slot, or turn off slot booking for this test.';
+  if (!(duration > 0))
+    return 'Slot booking needs a time limit (duration) so each slot has a window.';
+  return null;
+}
+// Reconcile a test's slots inside a transaction. Slots a student already booked
+// are never deleted (so a teacher can't silently strip someone's booking).
+async function writeSlots(t, testId, slots) {
+  const incoming = normalizeSlots(slots);
+  const keepIds = new Set(incoming.filter((s) => s.id).map((s) => s.id));
+  const existing = await t.all('SELECT id FROM test_slots WHERE test_id = ?', [testId]);
+  for (const ex of existing) {
+    if (keepIds.has(ex.id)) continue;
+    const booked = await t.get('SELECT 1 FROM assignments WHERE slot_id = ? LIMIT 1', [ex.id]);
+    if (!booked) await t.run('DELETE FROM test_slots WHERE id = ?', [ex.id]);
+  }
+  for (const s of incoming) {
+    if (s.id && keepIds.has(s.id)) {
+      await t.run('UPDATE test_slots SET slot_at = ?, capacity = ? WHERE id = ? AND test_id = ?', [s.at, s.capacity, s.id, testId]);
+    } else {
+      await t.run('INSERT INTO test_slots (test_id, slot_at, capacity) VALUES (?, ?, ?)', [testId, s.at, s.capacity]);
+    }
+  }
+}
+
 app.post('/api/tests', requireAuth('teacher'), requireActiveSubscription, h(async (req, res) => {
   const title = (req.body.title || '').trim();
   const description = (req.body.description || '').trim();
@@ -1289,15 +1367,21 @@ app.post('/api/tests', requireAuth('teacher'), requireActiveSubscription, h(asyn
   if (invalid) return res.status(400).json({ error: invalid });
   const { negative_marking, penalty } = readMarking(req.body);
   const dueDate = readDueDate(req.body);
+  const startsAt = readStartDate(req.body);
   const duration = readDuration(req.body);
   const { proctored, maxViolations } = readProctoring(req.body);
+  const requiresSlot = req.body.requiresSlot ? 1 : 0;
+  const slots = normalizeSlots(req.body.slots);
+  const slotErr = validateSlotSetup(requiresSlot, slots, duration);
+  if (slotErr) return res.status(400).json({ error: slotErr });
 
   const testId = await tx(async (t) => {
     const newId = (await t.run(
-      'INSERT INTO tests (teacher_id, title, description, negative_marking, penalty, due_date, duration_minutes, proctored, max_violations) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
-      [req.user.id, title, description, negative_marking, penalty, dueDate, duration, proctored, maxViolations]
+      'INSERT INTO tests (teacher_id, title, description, negative_marking, penalty, due_date, starts_at, duration_minutes, proctored, max_violations, requires_slot) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
+      [req.user.id, title, description, negative_marking, penalty, dueDate, startsAt, duration, proctored, maxViolations, requiresSlot]
     )).rows[0].id;
     await writeQuestions(t.run, newId, questions);
+    if (requiresSlot) await writeSlots(t, newId, slots);
     return newId;
   });
   await logAudit(req, { action: 'test.create', entityType: 'test', entityId: testId, entityLabel: title, details: `${questions.length} question(s)` });
@@ -1316,10 +1400,16 @@ app.put('/api/tests/:id', requireAuth('teacher'), requireActiveSubscription, h(a
   if (invalid) return res.status(400).json({ error: invalid });
   const { negative_marking, penalty } = readMarking(req.body);
   const dueDate = readDueDate(req.body);
+  const startsAt = readStartDate(req.body);
   const duration = readDuration(req.body);
   const { proctored, maxViolations } = readProctoring(req.body);
+  const requiresSlot = req.body.requiresSlot ? 1 : 0;
+  const slots = normalizeSlots(req.body.slots);
+  const slotErr = validateSlotSetup(requiresSlot, slots, duration);
+  if (slotErr) return res.status(400).json({ error: slotErr });
   const oldQuestions = await all("SELECT prompt, section FROM questions WHERE test_id = ? AND archived = 0 ORDER BY position, id", [test.id]);
   const oldQCount = oldQuestions.length;
+  const oldSlotCount = (await get('SELECT COUNT(*) AS c FROM test_slots WHERE test_id = ?', [test.id])).c;
 
   const keptAttempts = await tx(async (t) => {
     // Archive any answered current question (so old results keep their exact
@@ -1331,15 +1421,18 @@ app.put('/api/tests/:id', requireAuth('teacher'), requireActiveSubscription, h(a
       else await t.run('DELETE FROM questions WHERE id = ?', [q.id]);
     }
     await t.run(
-      'UPDATE tests SET title = ?, description = ?, negative_marking = ?, penalty = ?, due_date = ?, duration_minutes = ?, proctored = ?, max_violations = ? WHERE id = ?',
-      [title, description, negative_marking, penalty, dueDate, duration, proctored, maxViolations, test.id]
+      'UPDATE tests SET title = ?, description = ?, negative_marking = ?, penalty = ?, due_date = ?, starts_at = ?, duration_minutes = ?, proctored = ?, max_violations = ?, requires_slot = ? WHERE id = ?',
+      [title, description, negative_marking, penalty, dueDate, startsAt, duration, proctored, maxViolations, requiresSlot, test.id]
     );
     await writeQuestions(t.run, test.id, questions);
+    // Turning slot booking off (or editing the slot list) reconciles rows;
+    // an empty list with booking off clears every unbooked slot.
+    await writeSlots(t, test.id, requiresSlot ? slots : []);
     return (await t.get("SELECT COUNT(*) AS c FROM attempts WHERE test_id = ? AND submitted_at IS NOT NULL", [test.id])).c;
   });
   const changes = describeTestChanges({
-    old: { title: test.title, description: test.description || '', dueDate: test.due_date || '', duration: test.duration_minutes, negative_marking: test.negative_marking, penalty: test.penalty, proctored: test.proctored, maxViolations: test.max_violations, questions: oldQuestions },
-    now: { title, description, dueDate, duration, negative_marking, penalty, proctored, maxViolations, questions },
+    old: { title: test.title, description: test.description || '', dueDate: test.due_date || '', startsAt: test.starts_at || '', requiresSlot: test.requires_slot, slotCount: oldSlotCount, duration: test.duration_minutes, negative_marking: test.negative_marking, penalty: test.penalty, proctored: test.proctored, maxViolations: test.max_violations, questions: oldQuestions },
+    now: { title, description, dueDate, startsAt, requiresSlot, slotCount: slots.length, duration, negative_marking, penalty, proctored, maxViolations, questions },
   });
   await logAudit(req, { action: 'test.update', entityType: 'test', entityId: test.id, entityLabel: title, details: changes.length ? changes.join('; ') : 'Re-saved with no changes' });
   res.json({ id: test.id, keptAttempts });
@@ -1347,7 +1440,8 @@ app.put('/api/tests/:id', requireAuth('teacher'), requireActiveSubscription, h(a
 
 app.get('/api/tests', requireAuth('teacher'), h(async (req, res) => {
   const tests = await all(
-    `SELECT t.id, t.title, t.description, t.negative_marking, t.penalty, t.due_date, t.duration_minutes, t.created_at,
+    `SELECT t.id, t.title, t.description, t.negative_marking, t.penalty, t.due_date, t.starts_at, t.duration_minutes, t.requires_slot, t.created_at,
+            (SELECT COUNT(*) FROM test_slots ts WHERE ts.test_id = t.id) AS slot_count,
             (SELECT COUNT(*) FROM questions q WHERE q.test_id = t.id AND q.archived = 0) AS question_count,
             (SELECT COUNT(*) FROM assignments a WHERE a.test_id = t.id) AS assigned_count,
             (SELECT COUNT(*) FROM attempts at WHERE at.test_id = t.id AND at.submitted_at IS NOT NULL) AS submitted_count
@@ -1394,7 +1488,9 @@ app.get('/api/tests/:id', requireAuth('teacher'), h(async (req, res) => {
   if (!test) return res.status(404).json({ error: 'Test not found.' });
   const questions = (await all('SELECT * FROM questions WHERE test_id = ? AND archived = 0 ORDER BY position', [test.id]))
     .map((q) => ({ ...q, options: JSON.parse(q.options_json) }));
-  res.json({ test, questions });
+  const slots = (await all('SELECT id, slot_at, capacity FROM test_slots WHERE test_id = ? ORDER BY slot_at, id', [test.id]))
+    .map((s) => ({ id: s.id, at: s.slot_at, capacity: s.capacity }));
+  res.json({ test, questions, slots });
 }));
 
 app.delete('/api/tests/:id', requireAuth('teacher'), requireActiveSubscription, h(async (req, res) => {
@@ -1477,13 +1573,34 @@ app.post('/api/assignments', requireAuth('teacher'), requireActiveSubscription, 
 // Who is already assigned to a given test (teacher view).
 app.get('/api/tests/:id/assignments', requireAuth('teacher'), h(async (req, res) => {
   const rows = await all(
-    `SELECT a.student_id, u.name, u.email,
-            EXISTS(SELECT 1 FROM attempts at WHERE at.assignment_id = a.id AND at.submitted_at IS NOT NULL) AS submitted
+    `SELECT a.student_id, u.name, u.email, a.slot_id, bs.slot_at,
+            EXISTS(SELECT 1 FROM attempts at WHERE at.assignment_id = a.id AND at.submitted_at IS NOT NULL) AS submitted,
+            EXISTS(SELECT 1 FROM attempts at WHERE at.assignment_id = a.id) AS started
        FROM assignments a JOIN users u ON u.id = a.student_id
+       LEFT JOIN test_slots bs ON bs.id = a.slot_id
       WHERE a.test_id = ?`,
     [req.params.id]
   );
-  res.json({ assigned: rows });
+  res.json({ assigned: rows.map((r) => ({ ...r, slotAt: r.slot_at || null })) });
+}));
+
+// Teacher re-opens booking for a student who missed (or needs to change) their
+// slot: clears the booked slot and any un-submitted attempt so they can rebook.
+app.post('/api/tests/:id/reopen-slot', requireAuth('teacher'), requireActiveSubscription, h(async (req, res) => {
+  const test = await get('SELECT * FROM tests WHERE id = ? AND teacher_id = ?', [req.params.id, req.user.id]);
+  if (!test) return res.status(404).json({ error: 'Test not found.' });
+  const studentId = Number(req.body.studentId);
+  const a = await get('SELECT * FROM assignments WHERE test_id = ? AND student_id = ?', [test.id, studentId]);
+  if (!a) return res.status(404).json({ error: 'That student is not assigned to this test.' });
+  const done = await get('SELECT 1 FROM attempts WHERE assignment_id = ? AND submitted_at IS NOT NULL', [a.id]);
+  if (done) return res.status(400).json({ error: 'That student has already submitted this test.' });
+  const student = await get('SELECT name FROM users WHERE id = ?', [studentId]);
+  await tx(async (t) => {
+    await t.run('DELETE FROM attempts WHERE assignment_id = ? AND submitted_at IS NULL', [a.id]);
+    await t.run('UPDATE assignments SET slot_id = NULL WHERE id = ?', [a.id]);
+  });
+  await logAudit(req, { action: 'test.reopen_slot', entityType: 'test', entityId: test.id, entityLabel: test.title, details: `Reopened slot booking for ${student ? student.name : 'student #' + studentId}` });
+  res.json({ ok: true });
 }));
 
 // ============================================================================
@@ -1524,7 +1641,8 @@ app.get('/api/my-assignments', requireAuth('student'), h(async (req, res) => {
   // active (enrolled, not disabled). Each test is labelled with its org so a
   // student enrolled in several institutes can tell them apart.
   const rows = await all(
-    `SELECT a.id AS assignment_id, t.id AS test_id, t.title, t.description, t.due_date,
+    `SELECT a.id AS assignment_id, a.slot_id, t.id AS test_id, t.title, t.description, t.due_date,
+            t.starts_at, t.requires_slot, t.duration_minutes, bs.slot_at AS booked_slot_at,
             o.id AS org_id, o.name AS org_name, st.access_until AS membership_access,
             (SELECT COUNT(*) FROM questions q WHERE q.test_id = t.id AND q.archived = 0) AS question_count,
             at.id AS attempt_id, at.submitted_at, at.auto_score, at.manual_score,
@@ -1535,30 +1653,109 @@ app.get('/api/my-assignments', requireAuth('student'), h(async (req, res) => {
        JOIN signup_tokens st ON st.student_id = a.student_id AND st.org_id = tu.org_id
             AND st.invite_role = 'student' AND st.used = 1 AND st.disabled = 0
        LEFT JOIN organizations o ON o.id = tu.org_id
+       LEFT JOIN test_slots bs ON bs.id = a.slot_id
        LEFT JOIN attempts at ON at.assignment_id = a.id
       WHERE a.student_id = ?
       ORDER BY a.created_at DESC`,
     [req.user.id]
   );
+  const now = Date.now();
   const assignments = rows
     .filter((r) => !isExpired(r.membership_access)) // per-org access window
-    .map((r) => ({
-      assignmentId: r.assignment_id,
-      testId: r.test_id,
-      title: r.title,
-      description: r.description,
-      orgId: r.org_id || null,
-      orgName: r.org_name || null,
-      questionCount: r.question_count,
-      submitted: !!r.submitted_at,
-      started: !!r.attempt_id && !r.submitted_at,
-      needsGrading: !!r.needs_grading,
-      score: r.submitted_at ? r.auto_score + r.manual_score : null,
-      maxScore: r.max_score,
-      dueDate: r.due_date,
-      closed: isClosed(r.due_date),
-    }));
+    .map((r) => {
+      const submitted = !!r.submitted_at;
+      const requiresSlot = !!r.requires_slot;
+      const slotAt = r.booked_slot_at || null;
+      const win = slotAt ? slotWindow(slotAt, r.duration_minutes) : null;
+      return {
+        assignmentId: r.assignment_id,
+        testId: r.test_id,
+        title: r.title,
+        description: r.description,
+        orgId: r.org_id || null,
+        orgName: r.org_name || null,
+        questionCount: r.question_count,
+        submitted,
+        started: !!r.attempt_id && !submitted,
+        needsGrading: !!r.needs_grading,
+        score: submitted ? r.auto_score + r.manual_score : null,
+        maxScore: r.max_score,
+        dueDate: r.due_date,
+        closed: isClosed(r.due_date),
+        startsAt: r.starts_at || '',
+        notYetOpen: notYetOpen(r.starts_at),
+        // Slot booking state (only meaningful when requiresSlot is true).
+        requiresSlot,
+        slotAt,
+        needsBooking: requiresSlot && !slotAt && !submitted,
+        slotOpen: !!win && now >= win.openAt && now <= win.closeAt,
+        slotUpcoming: !!win && now < win.openAt,
+        slotMissed: !!win && !submitted && now > win.closeAt,
+        slotOpenAt: win ? new Date(win.openAt).toISOString() : null,
+        slotCloseAt: win ? new Date(win.closeAt).toISOString() : null,
+      };
+    });
   res.json({ assignments });
+}));
+
+// The slots a student can pick from for a slot-scheduled test, with seats left.
+app.get('/api/my-assignments/:assignmentId/slots', requireAuth('student'), h(async (req, res) => {
+  const a = await get('SELECT * FROM assignments WHERE id = ? AND student_id = ?', [req.params.assignmentId, req.user.id]);
+  if (!a) return res.status(404).json({ error: 'Assignment not found.' });
+  if (!membershipActive(await membershipForTest(req.user.id, a.test_id)))
+    return res.status(403).json({ error: 'Your access to this organization has ended. Please contact the institute.' });
+  const test = await get('SELECT requires_slot, duration_minutes FROM tests WHERE id = ?', [a.test_id]);
+  if (!test.requires_slot) return res.json({ slots: [], bookedSlotId: null });
+  const rows = await all(
+    `SELECT ts.id, ts.slot_at, ts.capacity,
+            (SELECT COUNT(*) FROM assignments a2 WHERE a2.slot_id = ts.id) AS booked
+       FROM test_slots ts WHERE ts.test_id = ? ORDER BY ts.slot_at, ts.id`,
+    [a.test_id]
+  );
+  const now = Date.now();
+  const slots = rows.map((r) => {
+    const win = slotWindow(r.slot_at, test.duration_minutes);
+    const isMine = r.id === a.slot_id;
+    return {
+      id: r.id, slotAt: r.slot_at, capacity: r.capacity, booked: r.booked,
+      full: r.capacity > 0 && r.booked >= r.capacity && !isMine,
+      past: !!win && now > win.closeAt,
+      opensAt: win ? new Date(win.openAt).toISOString() : null,
+      closesAt: win ? new Date(win.closeAt).toISOString() : null,
+      mine: isMine,
+    };
+  });
+  res.json({ slots, bookedSlotId: a.slot_id || null });
+}));
+
+// A student books (or changes) their slot for a slot-scheduled test.
+app.post('/api/my-assignments/:assignmentId/slot', requireAuth('student'), h(async (req, res) => {
+  const a = await get('SELECT * FROM assignments WHERE id = ? AND student_id = ?', [req.params.assignmentId, req.user.id]);
+  if (!a) return res.status(404).json({ error: 'Assignment not found.' });
+  if (!membershipActive(await membershipForTest(req.user.id, a.test_id)))
+    return res.status(403).json({ error: 'Your access to this organization has ended. Please contact the institute.' });
+  const test = await get('SELECT requires_slot, duration_minutes, due_date FROM tests WHERE id = ?', [a.test_id]);
+  if (!test.requires_slot) return res.status(400).json({ error: 'This test does not use time slots.' });
+  if (isClosed(test.due_date)) return res.status(403).json({ error: 'This test is closed.' });
+  const attempt = await get('SELECT id, submitted_at FROM attempts WHERE assignment_id = ?', [a.id]);
+  if (attempt && attempt.submitted_at) return res.status(409).json({ error: 'You have already submitted this test.' });
+  if (attempt) return res.status(409).json({ error: 'You have already started this test, so the slot cannot be changed.' });
+
+  const slotId = Number(req.body.slotId);
+  const booked = await tx(async (t) => {
+    const slot = await t.get('SELECT id, slot_at, capacity FROM test_slots WHERE id = ? AND test_id = ?', [slotId, a.test_id]);
+    if (!slot) return { error: 'That time slot is no longer available.' };
+    const win = slotWindow(slot.slot_at, test.duration_minutes);
+    if (win && Date.now() > win.closeAt) return { error: 'That slot has already passed. Please pick another.' };
+    if (slot.capacity > 0) {
+      const count = (await t.get('SELECT COUNT(*) AS c FROM assignments WHERE slot_id = ? AND id <> ?', [slotId, a.id])).c;
+      if (count >= slot.capacity) return { error: 'That slot is full. Please pick another time.' };
+    }
+    await t.run('UPDATE assignments SET slot_id = ? WHERE id = ?', [slotId, a.id]);
+    return { slotAt: slot.slot_at };
+  });
+  if (booked.error) return res.status(409).json({ error: booked.error });
+  res.json({ ok: true, slotAt: booked.slotAt });
 }));
 
 // A student reviews their own submitted attempt (read-only): questions, their
@@ -1605,9 +1802,26 @@ app.get('/api/take/:assignmentId', requireAuth('student'), h(async (req, res) =>
   if (attempt && attempt.submitted_at)
     return res.status(409).json({ error: 'You have already submitted this test.' });
 
-  const test = await get('SELECT id, title, description, negative_marking, penalty, due_date, duration_minutes, proctored, max_violations FROM tests WHERE id = ?', [a.test_id]);
+  const test = await get('SELECT id, title, description, negative_marking, penalty, due_date, starts_at, duration_minutes, requires_slot, proctored, max_violations FROM tests WHERE id = ?', [a.test_id]);
   if (isClosed(test.due_date))
     return res.status(403).json({ error: 'The deadline for this test has passed. You can no longer take it.' });
+  if (notYetOpen(test.starts_at))
+    return res.status(403).json({ error: `This test hasn't opened yet. It opens at ${fmtWhen(test.starts_at)}.` });
+
+  // Slot-scheduled tests are only accessible inside the student's booked window.
+  let slotWin = null;
+  if (test.requires_slot) {
+    if (!a.slot_id)
+      return res.status(403).json({ error: 'Please book a time slot for this test before starting it.' });
+    const slot = await get('SELECT slot_at FROM test_slots WHERE id = ?', [a.slot_id]);
+    slotWin = slot ? slotWindow(slot.slot_at, test.duration_minutes) : null;
+    if (!slotWin)
+      return res.status(403).json({ error: 'Your booked slot is no longer available. Ask your teacher to reschedule.' });
+    if (Date.now() < slotWin.openAt)
+      return res.status(403).json({ error: `Your slot opens at ${fmtWhen(slot.slot_at)}. Come back then.` });
+    if (Date.now() > slotWin.closeAt)
+      return res.status(403).json({ error: 'You missed your slot window. Ask your teacher to reschedule you.' });
+  }
 
   // Ensure an in-progress attempt exists so answers/position can be saved and
   // resumed after a disconnect. For timed tests this also anchors the countdown.
@@ -1621,6 +1835,11 @@ app.get('/api/take/:assignmentId', requireAuth('student'), h(async (req, res) =>
   if (test.duration_minutes > 0) {
     const elapsed = (Date.now() - new Date(attempt.started_at).getTime()) / 1000;
     remainingSeconds = Math.max(0, Math.round(test.duration_minutes * 60 - elapsed));
+  }
+  // The slot window is a hard stop even mid-attempt: time runs out at close.
+  if (slotWin) {
+    const untilClose = Math.max(0, Math.round((slotWin.closeAt - Date.now()) / 1000));
+    remainingSeconds = remainingSeconds == null ? untilClose : Math.min(remainingSeconds, untilClose);
   }
   let savedAnswers = {};
   try { const p = JSON.parse(attempt.draft_answers || '{}'); if (p && typeof p === 'object') savedAnswers = p; } catch { /* ignore */ }
@@ -1655,9 +1874,17 @@ app.post('/api/submit/:assignmentId', requireAuth('student'), h(async (req, res)
   if (existing && existing.submitted_at)
     return res.status(409).json({ error: 'You have already submitted this test.' });
 
-  const test = await get('SELECT negative_marking, penalty, due_date FROM tests WHERE id = ?', [a.test_id]);
+  const test = await get('SELECT negative_marking, penalty, due_date, requires_slot, duration_minutes FROM tests WHERE id = ?', [a.test_id]);
   if (isClosed(test.due_date))
     return res.status(403).json({ error: 'The deadline for this test has passed. Your submission was not accepted.' });
+  // Honour the booked slot window on submit too (with a short grace so a
+  // submission that starts just before close still lands).
+  if (test.requires_slot && a.slot_id) {
+    const slot = await get('SELECT slot_at FROM test_slots WHERE id = ?', [a.slot_id]);
+    const win = slot ? slotWindow(slot.slot_at, test.duration_minutes) : null;
+    if (win && Date.now() > win.closeAt + 60 * 1000)
+      return res.status(403).json({ error: 'Your slot window has closed. Your submission was not accepted — ask your teacher to reschedule.' });
+  }
   const questions = await all('SELECT * FROM questions WHERE test_id = ? AND archived = 0 ORDER BY position', [a.test_id]);
   const responses = req.body.answers || {}; // { questionId: response }
   const violations = Math.max(0, Math.round(Number(req.body.violations)) || 0); // proctoring events

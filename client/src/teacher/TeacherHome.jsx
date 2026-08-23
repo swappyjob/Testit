@@ -5,6 +5,7 @@ const ACTION_LABEL = {
   'test.create': 'created a test', 'test.update': 'edited a test', 'test.delete': 'deleted a test',
   'test.assign': 'assigned a test', 'student.create': 'added a student', 'student.disable': 'disabled a student',
   'student.enable': 'enabled a student', 'teacher.create': 'invited a teacher',
+  'test.reopen_slot': 'reopened a slot booking',
 };
 function greeting() {
   const h = new Date().getHours();

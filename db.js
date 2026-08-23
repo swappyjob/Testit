@@ -317,6 +317,20 @@ async function init() {
     data        TEXT NOT NULL DEFAULT '{}',
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`);
+  // Scheduled test windows: an optional start date, and (optionally) a set of
+  // teacher-defined time slots students book so they appear only at their time.
+  await pool.query("ALTER TABLE tests ADD COLUMN IF NOT EXISTS starts_at TEXT NOT NULL DEFAULT ''");
+  await pool.query('ALTER TABLE tests ADD COLUMN IF NOT EXISTS requires_slot INTEGER NOT NULL DEFAULT 0');
+  await pool.query(`CREATE TABLE IF NOT EXISTS test_slots (
+    id         SERIAL PRIMARY KEY,
+    test_id    INTEGER NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
+    slot_at    TEXT NOT NULL,               -- datetime-local string (YYYY-MM-DDTHH:MM)
+    capacity   INTEGER NOT NULL DEFAULT 0,  -- 0 = unlimited seats
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+  // The slot a student booked for a slot-scheduled test (NULL = not booked yet).
+  await pool.query('ALTER TABLE assignments ADD COLUMN IF NOT EXISTS slot_id INTEGER REFERENCES test_slots(id) ON DELETE SET NULL');
+
   // Existing organizations default to Basic.
   await pool.query("UPDATE organizations SET plan_id = (SELECT id FROM plans WHERE name = 'Basic') WHERE plan_id IS NULL");
 }

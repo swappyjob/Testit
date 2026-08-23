@@ -7,6 +7,7 @@ const ACTION = {
   'test.update':    { label: 'Edited test',       color: '#92400e', bg: '#fef3c7' },
   'test.delete':    { label: 'Deleted test',      color: '#991b1b', bg: '#fee2e2' },
   'test.assign':    { label: 'Assigned test',     color: '#1e40af', bg: '#dbeafe' },
+  'test.reopen_slot': { label: 'Reopened slot',   color: '#92400e', bg: '#fef3c7' },
   'student.create': { label: 'Added student',     color: '#065f46', bg: '#d1fae5' },
   'student.disable':{ label: 'Disabled student',  color: '#991b1b', bg: '#fee2e2' },
   'student.enable': { label: 'Enabled student',   color: '#065f46', bg: '#d1fae5' },

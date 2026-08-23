@@ -67,6 +67,7 @@ export default function MyTests({ onEdit, onResumeDraft, onCreate, readOnly }) {
                 {t.title}{' '}
                 {t.negative_marking ? <span className="pill amber">−{t.penalty} per wrong</span> : null}{' '}
                 {t.duration_minutes ? <span className="pill brand">⏱ {t.duration_minutes} min</span> : null}{' '}
+                {t.requires_slot ? <span className="pill brand">🗓 {t.slot_count} slot{t.slot_count === 1 ? '' : 's'}</span> : null}{' '}
                 {t.closed ? <span className="pill gray">closed</span> : null}
               </h3>
               <div className="muted" style={{ fontSize: 13 }}>
@@ -99,14 +100,24 @@ export default function MyTests({ onEdit, onResumeDraft, onCreate, readOnly }) {
 function AssignPanel({ test, onChanged }) {
   const [students, setStudents] = useState(null);
   const [assigned, setAssigned] = useState(new Set());
+  const [assignedRows, setAssignedRows] = useState([]);
   const [checked, setChecked] = useState(new Set());
   const [msg, setMsg] = useState('');
 
-  const reloadAssigned = () => api('/api/tests/' + test.id + '/assignments').then((a) => setAssigned(new Set(a.assigned.map((x) => x.student_id))));
+  const reloadAssigned = () => api('/api/tests/' + test.id + '/assignments').then((a) => {
+    setAssigned(new Set(a.assigned.map((x) => x.student_id)));
+    setAssignedRows(a.assigned);
+  });
   useEffect(() => {
     api('/api/students').then((s) => setStudents(s.students.filter((x) => x.signedUp && x.studentId)));
     reloadAssigned();
   }, []);
+
+  async function reopenSlot(studentId) {
+    if (!window.confirm('Reopen slot booking for this student? Their current booking (and any unsubmitted attempt) is cleared so they can pick a new slot.')) return;
+    await api('/api/tests/' + test.id + '/reopen-slot', 'POST', { studentId });
+    await reloadAssigned();
+  }
 
   function toggle(id) {
     setChecked((c) => { const n = new Set(c); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -153,6 +164,47 @@ function AssignPanel({ test, onChanged }) {
         </>
       )}
       <Msg text={msg} kind="ok" />
+      {test.requires_slot && <SlotBookings test={test} rows={assignedRows} onReopen={reopenSlot} />}
+    </div>
+  );
+}
+
+// Teacher view of who has booked which slot, with a "reopen" for missed slots.
+function SlotBookings({ test, rows, onReopen }) {
+  const now = Date.now();
+  const closeOf = (slotAt) => new Date(slotAt).getTime() + ((test.duration_minutes || 0) + 30) * 60000;
+  const booked = rows.filter((r) => r.slotAt).length;
+  return (
+    <div style={{ marginTop: 20, borderTop: '1px solid var(--line)', paddingTop: 14 }}>
+      <h3 style={{ margin: '0 0 4px' }}>🗓 Slot bookings</h3>
+      <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>{booked} of {rows.length} assigned student(s) have booked a slot.</p>
+      {rows.length === 0 ? (
+        <p className="muted">No students assigned yet.</p>
+      ) : (
+        <table>
+          <thead><tr><th>Student</th><th>Slot</th><th>Status</th><th></th></tr></thead>
+          <tbody>
+            {rows.map((r) => {
+              const missed = r.slotAt && !r.submitted && now > closeOf(r.slotAt);
+              const status = r.submitted ? <span className="pill green">submitted</span>
+                : !r.slotAt ? <span className="pill gray">not booked</span>
+                : missed ? <span className="pill amber">missed</span>
+                : r.started ? <span className="pill brand">in progress</span>
+                : <span className="pill brand">booked</span>;
+              return (
+                <tr key={r.student_id}>
+                  <td>{r.name}<div className="muted" style={{ fontSize: 12 }}>{r.email}</div></td>
+                  <td>{r.slotAt ? fmtDateTime(r.slotAt) : '—'}</td>
+                  <td>{status}</td>
+                  <td>{r.slotAt && !r.submitted
+                    ? <button className="btn secondary small" onClick={() => onReopen(r.student_id)}>Reopen</button>
+                    : null}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
     </div>
   );
 }

@@ -9,10 +9,12 @@ export default function StudentDashboard() {
   const [assignments, setAssignments] = useState(null);
   const [orgs, setOrgs] = useState(null);
   const [activeOrg, setActiveOrg] = useState(null); // 'all' | orgId(number) | null (not chosen yet)
+  const [bookingFor, setBookingFor] = useState(null); // assignment whose slot is being booked
 
+  const loadAssignments = () => api('/api/my-assignments').then((d) => setAssignments(d.assignments)).catch(() => setAssignments([]));
   useEffect(() => {
     if (!user) return;
-    api('/api/my-assignments').then((d) => setAssignments(d.assignments)).catch(() => setAssignments([]));
+    loadAssignments();
     api('/api/my-orgs').then((d) => setOrgs(d.orgs)).catch(() => setOrgs([]));
   }, [user]);
 
@@ -87,6 +89,25 @@ export default function StudentDashboard() {
                   </>
                 ) : a.closed ? (
                   <span className="pill gray">closed · deadline passed</span>
+                ) : a.requiresSlot ? (
+                  a.needsBooking ? (
+                    <button className="btn small" onClick={() => setBookingFor(a)}>🗓 Choose your slot</button>
+                  ) : a.slotMissed ? (
+                    <div style={{ textAlign: 'right' }}>
+                      <span className="pill amber">missed slot</span>
+                      <div className="muted" style={{ fontSize: 12 }}>Ask your teacher to reschedule you.</div>
+                    </div>
+                  ) : a.slotUpcoming ? (
+                    <div style={{ textAlign: 'right' }}>
+                      <span className="pill brand">Slot: {fmtDateTime(a.slotAt)}</span>
+                      <div className="muted" style={{ fontSize: 12 }}>Opens {fmtDateTime(a.slotOpenAt)}</div>
+                      <button className="btn ghost small" style={{ marginTop: 4 }} onClick={() => setBookingFor(a)}>Change slot</button>
+                    </div>
+                  ) : (
+                    <Link className="btn small" to={'/take-test?a=' + a.assignmentId}>{a.started ? 'Resume test' : 'Start test'}</Link>
+                  )
+                ) : a.notYetOpen ? (
+                  <span className="pill gray">opens {fmtDateTime(a.startsAt)}</span>
                 ) : (
                   <Link className="btn small" to={'/take-test?a=' + a.assignmentId}>{a.started ? 'Resume test' : 'Start test'}</Link>
                 )}
@@ -95,6 +116,14 @@ export default function StudentDashboard() {
           ))
         )}
       </div>
+
+      {bookingFor && (
+        <SlotBooking
+          assignment={bookingFor}
+          onClose={() => setBookingFor(null)}
+          onBooked={() => { setBookingFor(null); loadAssignments(); }}
+        />
+      )}
 
       {showChooser && (
         <Modal title="Choose your institute" onClose={() => chooseOrg('all')}>
@@ -108,5 +137,57 @@ export default function StudentDashboard() {
         </Modal>
       )}
     </>
+  );
+}
+
+// Lets a student pick (or change) their time slot for a slot-scheduled test.
+function SlotBooking({ assignment, onClose, onBooked }) {
+  const [slots, setSlots] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  const load = () => api('/api/my-assignments/' + assignment.assignmentId + '/slots')
+    .then((d) => setSlots(d.slots)).catch((e) => setErr(e.message));
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
+
+  async function book(slotId) {
+    setBusy(true); setErr('');
+    try {
+      await api('/api/my-assignments/' + assignment.assignmentId + '/slot', 'POST', { slotId });
+      onBooked();
+    } catch (e) { setErr(e.message); setBusy(false); load(); }
+  }
+
+  return (
+    <Modal title={'Choose your slot — ' + assignment.title} onClose={onClose}>
+      <p className="muted" style={{ marginTop: 0 }}>
+        Pick a time to sit this test. You can enter from 30&nbsp;min before your slot until 30&nbsp;min after it ends.
+      </p>
+      {err && <p className="pill amber" style={{ display: 'inline-block' }}>{err}</p>}
+      {slots === null ? (
+        <p className="muted">Loading…</p>
+      ) : slots.length === 0 ? (
+        <p className="muted">No slots are available. Please ask your teacher.</p>
+      ) : (
+        <div style={{ display: 'grid', gap: 8, marginTop: 8 }}>
+          {slots.map((s) => {
+            const disabled = busy || s.past || s.full;
+            const seats = s.capacity > 0 ? `${Math.max(0, s.capacity - s.booked)} seat(s) left` : 'Open seating';
+            return (
+              <button key={s.id} className={'btn' + (s.mine ? '' : ' secondary')} disabled={disabled && !s.mine}
+                onClick={() => book(s.id)} style={{ justifyContent: 'space-between', textAlign: 'left', opacity: s.past ? 0.5 : 1 }}>
+                <span>
+                  <b>{fmtDateTime(s.slotAt)}</b>
+                  <span className="muted" style={{ fontSize: 12, display: 'block' }}>
+                    {s.past ? 'Passed' : s.full ? 'Full' : seats}{s.mine ? ' · your current slot' : ''}
+                  </span>
+                </span>
+                {s.mine ? <span className="pill green">Booked</span> : !disabled && <span>Select →</span>}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </Modal>
   );
 }
