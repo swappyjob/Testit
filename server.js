@@ -1,5 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
+import rateLimit from 'express-rate-limit';
+import helmet from 'helmet';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -17,8 +19,37 @@ const PROD = process.env.NODE_ENV === 'production';
 // 'https' and Secure cookies are sent correctly.
 if (PROD) app.set('trust proxy', 1);
 
+// Security headers. CSP is intentionally left off for now: the SPA relies on
+// inline styles and self-hosted MathLive/KaTeX worker & font assets, so a
+// default policy would break it. Every other helmet protection still applies
+// (HSTS, X-Content-Type-Options, frameguard, referrer policy, ...).
+app.use(helmet({ contentSecurityPolicy: false }));
+
+// --- Rate limiting: basic DoS + brute-force protection ----------------------
+// Disabled in the automated test run (which bursts thousands of requests from
+// one IP) via DISABLE_RATE_LIMIT=1.
+const rlSkip = () => process.env.DISABLE_RATE_LIMIT === '1';
+// A generous per-IP ceiling on ALL API traffic — absorbs floods/scraping while
+// staying well above what a busy institute (many students behind one shared IP)
+// needs. Tune `max` up if a large campus hits it during a live test.
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000, max: 600, standardHeaders: true, legacyHeaders: false, skip: rlSkip,
+  message: { error: 'Too many requests — please slow down and try again in a moment.' },
+});
+app.use('/api', apiLimiter);
+
 // Larger limit so base64-encoded question images fit in the JSON body.
 app.use(express.json({ limit: '8mb' }));
+
+// Stricter limit on sign-in to blunt password brute-forcing. Keyed by the
+// email being tried (NOT the IP), so a shared-IP computer lab where 40 students
+// each log in once is unaffected, while thousands of guesses at one account are
+// throttled.
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, max: 20, standardHeaders: true, legacyHeaders: false, skip: rlSkip,
+  keyGenerator: (req) => String(req.body?.email || '').trim().toLowerCase() || 'anon',
+  message: { error: 'Too many sign-in attempts for this account. Please wait a few minutes and try again.' },
+});
 
 // Folder where uploaded question images are stored and served from. In
 // production point UPLOAD_DIR at a persistent disk so images survive redeploys.
@@ -276,7 +307,7 @@ app.post('/api/register-teacher', requireAdmin, h(async (req, res) => {
   res.json({ user: { id: newId, role: 'teacher', name, email, isRoot: true, orgId } });
 }));
 
-app.post('/api/login', h(async (req, res) => {
+app.post('/api/login', loginLimiter, h(async (req, res) => {
   const email = (req.body.email || '').trim().toLowerCase();
   const password = req.body.password || '';
   const user = await get('SELECT * FROM users WHERE email = ?', [email]);

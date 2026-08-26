@@ -12,7 +12,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.TEST_PORT || 3999;
 const BASE = `http://localhost:${PORT}`;
 const PGPASSWORD = process.env.PGPASSWORD || 'postgres';
-const env = { ...process.env, PGDATABASE: 'testit_test', PGPASSWORD, PORT: String(PORT) };
+const env = { ...process.env, PGDATABASE: 'testit_test', PGPASSWORD, PORT: String(PORT), DISABLE_RATE_LIMIT: '1' };
 
 const uploadsDir = path.join(__dirname, 'public', 'uploads');
 const listUploads = () => { try { return new Set(fs.readdirSync(uploadsDir)); } catch { return new Set(); } };
