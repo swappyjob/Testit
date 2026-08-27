@@ -115,12 +115,22 @@ const daysOut = Math.round((new Date(yr.expiresAt).getTime() - Date.now()) / 864
 if (daysOut < 300) throw new Error('annual renewal should extend ~1 year, got ' + daysOut + ' days');
 ok('billing periods extend the subscription by the right length (annual ≈ 1 year)');
 
-// Subscribing to a plan (renew with planId) switches the tier AND sets the term.
+// Mid-cycle plan change while ACTIVE keeps the renewal date and prorates.
+const before = (await call(root, '/api/my-org/plan')).data.subscriptionUntil;
 const basic = orgPlan.plans.find((p) => p.name === 'Basic');
-const sub = await call(root, '/api/my-org/renew', 'POST', { period: 'quarterly', planId: basic.id });
-if (sub.status !== 200 || sub.data.planName !== 'Basic' || !sub.data.switched) throw new Error('subscribe-with-plan should switch the tier and report it: ' + JSON.stringify(sub.data));
-if ((await call(root, '/api/my-org/plan')).data.plan.name !== 'Basic') throw new Error('the org should now be on the Basic plan');
-ok('subscribing with a plan switches the tier and sets the chosen billing period in one step');
+const up = await call(root, '/api/my-org/renew', 'POST', { planId: basic.id }); // no period → change mode
+if (up.data.mode !== 'change' || up.data.planName !== 'Basic' || !up.data.upgrade) throw new Error('mid-cycle switch to a pricier plan should be an upgrade (change mode): ' + JSON.stringify(up.data));
+if (up.data.expiresAt !== before) throw new Error('an upgrade must NOT move the renewal date');
+if (!(up.data.prorated > 0)) throw new Error('an upgrade should compute a prorated top-up, got ' + up.data.prorated);
+if ((await call(root, '/api/my-org/plan')).data.plan.name !== 'Basic') throw new Error('the org should now be on Basic');
+ok('mid-cycle upgrade: plan applies immediately, renewal date unchanged, prorated top-up computed');
+
+// A cheaper switch mid-cycle is also change-mode: no charge, date still unchanged.
+const free = orgPlan.plans.find((p) => p.name === 'Free');
+const down = await call(root, '/api/my-org/renew', 'POST', { planId: free.id });
+if (down.data.mode !== 'change' || down.data.upgrade || down.data.prorated !== 0) throw new Error('a cheaper switch should be change-mode with no charge: ' + JSON.stringify(down.data));
+if (down.data.expiresAt !== before) throw new Error('a downgrade must not move the renewal date');
+ok('mid-cycle downgrade: change-mode, no charge, renewal date unchanged');
 
 // A non-root teacher cannot renew.
 const nonRoot = makeJar();

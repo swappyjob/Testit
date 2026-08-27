@@ -21,41 +21,79 @@ function previewExpiry(currentUntil, months) {
   return fmtDate(d);
 }
 
-// One modal for both flows: pass `targetPlan` to subscribe to that plan for a
-// chosen period; omit it to renew the current plan. onDone(result) fires after
-// a successful subscribe/renew.
+// A user-facing message for a subscribe / renew / mid-cycle change result.
+export function renewResultMessage(r) {
+  if (r.mode === 'change') {
+    const base = `${r.upgrade ? 'Upgraded to' : 'Changed to'} the ${r.planName} plan — your renewal date is unchanged (${fmtDate(r.expiresAt)}).`;
+    return r.prorated > 0 ? `${base} Prorated ${inr(r.prorated)} for the ${r.daysRemaining} remaining day(s).` : base;
+  }
+  return `Your organization is now on the ${r.planName} plan (${periodLabel(r.period)}) — active until ${fmtDate(r.expiresAt)}.`;
+}
+
+// One modal for all three flows. Pass `targetPlan` to move to that plan; omit it
+// to renew the current plan. onDone(result) fires after a successful change.
 export default function SubscribeModal({ targetPlan = null, onClose, onDone }) {
-  const [data, setData] = useState(null); // { plan, subscriptionUntil, ... }
+  const [data, setData] = useState(null); // { plan, subscriptionUntil, subscriptionExpired }
   const [period, setPeriod] = useState('yearly');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
 
   useEffect(() => { api('/api/my-org/plan').then(setData).catch((e) => setMsg({ ok: false, text: e.message })); }, []);
 
-  const subscribing = !!targetPlan;
-  const title = subscribing ? `Subscribe to ${targetPlan.name}` : 'Renew subscription';
+  if (!data) {
+    return <Modal title={targetPlan ? `Change to ${targetPlan.name}` : 'Renew subscription'} onClose={onClose}><p className="muted">Loading…</p></Modal>;
+  }
+
+  const active = !!data.subscriptionUntil && !data.subscriptionExpired;
+  const isSwitch = !!targetPlan && (!data.plan || targetPlan.id !== data.plan.id);
+  const changeMode = isSwitch && active; // mid-cycle plan change: keep the date, prorate
+  const priced = isSwitch ? targetPlan : data.plan;
+  const pricing = (priced && priced.pricing) || {};
+  const sel = RENEW_PERIODS.find((p) => p.key === period);
 
   async function confirm() {
     setBusy(true); setMsg(null);
     try {
-      const body = { period };
-      if (subscribing) body.planId = targetPlan.id;
-      const r = await api('/api/my-org/renew', 'POST', body);
-      onDone(r);
+      const body = changeMode ? { planId: targetPlan.id } : { period, ...(isSwitch ? { planId: targetPlan.id } : {}) };
+      onDone(await api('/api/my-org/renew', 'POST', body));
     } catch (e) { setMsg({ ok: false, text: e.message }); setBusy(false); }
   }
 
-  if (!data) return <Modal title={title} onClose={onClose}><p className="muted">Loading…</p></Modal>;
+  // -------- Mid-cycle change (upgrade / downgrade): no period, keep the date --------
+  if (changeMode) {
+    const daysRemaining = Math.max(0, Math.ceil((new Date(data.subscriptionUntil).getTime() - Date.now()) / 86400000));
+    const diff = (targetPlan.price_monthly || 0) - ((data.plan && data.plan.price_monthly) || 0);
+    const upgrade = diff > 0;
+    const prorated = upgrade ? Math.round((diff * daysRemaining) / 30) : 0;
+    return (
+      <Modal title={`${upgrade ? 'Upgrade to' : 'Change to'} ${targetPlan.name}`} onClose={onClose}>
+        <p className="muted" style={{ marginTop: 0 }}>
+          You're currently on <b>{data.plan ? data.plan.name : '—'}</b>, active until <b>{fmtDate(data.subscriptionUntil)}</b>.
+        </p>
+        <ul style={{ color: 'var(--muted)', lineHeight: 1.9, marginTop: 0 }}>
+          <li>The <b>{targetPlan.name}</b> plan{targetPlan.max_students != null ? ` (up to ${targetPlan.max_students} students)` : ''} applies <b>immediately</b>.</li>
+          <li>Your renewal date <b>stays {fmtDate(data.subscriptionUntil)}</b> — it doesn't move.</li>
+          {upgrade
+            ? <li>Prorated top-up for the <b>{daysRemaining}</b> remaining day(s): <b>{inr(prorated)}</b>. From your renewal date you'll pay {inr(targetPlan.price_monthly)}/mo.</li>
+            : <li>No extra charge now — the lower price applies from your next renewal.</li>}
+        </ul>
+        <div className="msg" style={{ background: '#eef2ff', color: 'var(--brand-dark)', fontSize: 13 }}>
+          💳 Online payment is coming soon. For now this applies the change and records the amount owed.
+        </div>
+        {msg && <Msg text={msg.text} kind={msg.ok ? 'ok' : 'error'} />}
+        <div className="row" style={{ marginTop: 16, gap: 10 }}>
+          <button className="btn" onClick={confirm} disabled={busy}>{busy ? 'Working…' : (upgrade ? `Upgrade${prorated ? ' — ' + inr(prorated) : ''}` : 'Change plan')}</button>
+          <button className="btn ghost" onClick={onClose}>Cancel</button>
+        </div>
+      </Modal>
+    );
+  }
 
-  const priced = subscribing ? targetPlan : data.plan;
-  const pricing = (priced && priced.pricing) || {};
-  const sel = RENEW_PERIODS.find((p) => p.key === period);
-  const isSwitch = subscribing && (!data.plan || targetPlan.id !== data.plan.id);
-  const base = isSwitch ? '' : data.subscriptionUntil; // fresh term when switching plans
-
+  // -------- Fresh subscribe (expired) or renew (same plan): pick a period --------
+  const title = isSwitch ? `Subscribe to ${targetPlan.name}` : 'Renew subscription';
   return (
     <Modal title={title} onClose={onClose}>
-      {subscribing
+      {isSwitch
         ? <p className="muted" style={{ marginTop: 0 }}>Choose a billing period for the <b>{targetPlan.name}</b> plan{targetPlan.max_students != null ? ` (up to ${targetPlan.max_students} students)` : ''}.</p>
         : (data.plan
             ? <p className="muted" style={{ marginTop: 0 }}>Your organization is on the <b>{data.plan.name}</b> plan. Choose a billing period to renew.</p>
@@ -72,15 +110,15 @@ export default function SubscribeModal({ targetPlan = null, onClose, onDone }) {
       </div>
 
       <p className="muted" style={{ fontSize: 13, marginTop: 12 }}>
-        {isSwitch ? 'New term starts today' : (data.subscriptionUntil ? 'Renews from your current expiry' : 'Starts today')} → active until <b>{previewExpiry(base, sel.months)}</b>{subscribing ? ` on the ${targetPlan.name} plan` : ''}.
+        {isSwitch ? 'New term starts today' : (data.subscriptionUntil ? 'Renews from your current expiry' : 'Starts today')} → active until <b>{previewExpiry(isSwitch ? '' : data.subscriptionUntil, sel.months)}</b>{isSwitch ? ` on the ${targetPlan.name} plan` : ''}.
       </p>
       <div className="msg" style={{ background: '#eef2ff', color: 'var(--brand-dark)', fontSize: 13 }}>
-        💳 Online payment is coming soon. For now this records the {subscribing ? 'subscription' : 'renewal'} and sets your access immediately.
+        💳 Online payment is coming soon. For now this records the {isSwitch ? 'subscription' : 'renewal'} and sets your access immediately.
       </div>
       {msg && <Msg text={msg.text} kind={msg.ok ? 'ok' : 'error'} />}
       <div className="row" style={{ marginTop: 16, gap: 10 }}>
         <button className="btn" onClick={confirm} disabled={busy}>
-          {busy ? 'Working…' : `${subscribing ? 'Subscribe' : 'Renew'} — ${priced ? inr(pricing[period]) : ''}`}
+          {busy ? 'Working…' : `${isSwitch ? 'Subscribe' : 'Renew'} — ${priced ? inr(pricing[period]) : ''}`}
         </button>
         <button className="btn ghost" onClick={onClose}>Cancel</button>
       </div>

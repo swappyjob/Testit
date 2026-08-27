@@ -7,7 +7,7 @@ import TestBuilder from '../teacher/TestBuilder.jsx';
 import StudentsTab from '../teacher/StudentsTab.jsx';
 import TeachersTab from '../teacher/TeachersTab.jsx';
 import SubscriptionTab from '../teacher/SubscriptionTab.jsx';
-import SubscribeModal, { periodLabel, fmtDate } from '../teacher/SubscribeModal.jsx';
+import SubscribeModal, { renewResultMessage } from '../teacher/SubscribeModal.jsx';
 import QuestionBank from '../teacher/QuestionBank.jsx';
 import AuditLogs from '../teacher/AuditLogs.jsx';
 import SupportTickets from '../teacher/SupportTickets.jsx';
@@ -141,7 +141,7 @@ export default function TeacherDashboard() {
           onDone={(r) => {
             setRenewedUntil(r.expiresAt);
             setShowRenew(false);
-            setRenewMsg(`Subscription renewed (${periodLabel(r.period)}) — now active until ${fmtDate(r.expiresAt)}.`);
+            setRenewMsg(renewResultMessage(r));
           }}
         />
       )}

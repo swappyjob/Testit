@@ -908,52 +908,90 @@ async function verifyRenewalPayment(/* req, plan, period */) {
   return { ok: false, error: 'Payment verification is not configured yet.' };
 }
 
-// A root teacher subscribes to a plan and/or renews for a chosen billing period.
-// - period: monthly | quarterly | half_yearly | yearly (required)
-// - planId (optional): switch to this plan; the new term then starts from today.
-//   Without planId it renews the current plan, extending from the current expiry.
-// Works even while read-only/expired (that's the point).
+// Days between now and a YYYY-MM-DD expiry (0 if past/empty).
+function daysUntil(dateStr) {
+  if (!dateStr) return 0;
+  const t = new Date(dateStr).getTime();
+  if (!Number.isFinite(t)) return 0;
+  return Math.max(0, Math.ceil((t - Date.now()) / 86400000));
+}
+// Prorated top-up to move from the current plan to a pricier one for the days
+// left in the cycle (monthly basis). 0 when the new plan isn't more expensive.
+function proratedTopUp(oldMonthly, newMonthly, daysRemaining) {
+  const diff = (newMonthly || 0) - (oldMonthly || 0);
+  return diff > 0 ? Math.round((diff * daysRemaining) / 30) : 0;
+}
+
+// A root teacher changes plan and/or renews their subscription. Three modes:
+//  - change  : switching plan while the subscription is still ACTIVE → the new
+//              plan (and its student cap) applies immediately, the renewal date
+//              is UNCHANGED, and a prorated top-up covers the remaining days.
+//  - subscribe: switching plan while expired/none → a fresh term for `period`.
+//  - renew   : same plan (no planId) → extend by `period` from the current expiry.
+// `period` (monthly|quarterly|half_yearly|yearly) is required for subscribe/renew.
 app.post('/api/my-org/renew', requireRoot, h(async (req, res) => {
-  const period = String(req.body.period || 'monthly');
-  if (!isPeriod(period)) return res.status(400).json({ error: 'Choose a valid billing period.' });
   const org = await get(
     `SELECT o.id, o.name, o.plan_id, o.subscription_expires_at,
-            p.name AS plan_name, p.max_students, p.price_monthly, p.price_quarterly, p.price_half_yearly, p.price_yearly
+            p.name AS plan_name, p.max_students AS cur_cap, p.price_monthly AS cur_monthly,
+            p.price_quarterly AS cur_q, p.price_half_yearly AS cur_h, p.price_yearly AS cur_y
        FROM organizations o LEFT JOIN plans p ON p.id = o.plan_id WHERE o.id = ?`,
     [req.user.org_id]
   );
   if (!org) return res.status(404).json({ error: 'Organization not found.' });
-
+  const active = !!org.subscription_expires_at && !isExpired(org.subscription_expires_at);
   const targetPlanId = req.body.planId ? Number(req.body.planId) : null;
   const switching = targetPlanId && targetPlanId !== org.plan_id;
-  // Current plan's pricing (aliased so org id/name aren't clobbered above).
-  let planForPrice = { name: org.plan_name, price_monthly: org.price_monthly, price_quarterly: org.price_quarterly, price_half_yearly: org.price_half_yearly, price_yearly: org.price_yearly };
-  if (switching) {
+
+  // Validate a plan switch (exists, not custom, within student cap).
+  async function loadTargetPlan() {
     const np = await get(`SELECT ${PLAN_COLS} FROM plans p WHERE p.id = ?`, [targetPlanId]);
-    if (!np) return res.status(400).json({ error: 'Invalid plan.' });
-    if (np.max_students == null) return res.status(403).json({ error: 'That’s a custom plan — please contact us to set it up for your organization.' });
+    if (!np) return { error: 'Invalid plan.', code: 400 };
+    if (np.max_students == null) return { error: 'That’s a custom plan — please contact us to set it up for your organization.', code: 403 };
     const studentCount = (await get("SELECT COUNT(*) AS c FROM signup_tokens WHERE invite_role = 'student' AND org_id = ?", [org.id])).c;
     if (studentCount > np.max_students)
-      return res.status(400).json({ error: `Your organization has ${studentCount} students, but the ${np.name} plan supports up to ${np.max_students}. Remove students or choose a larger plan.` });
-    planForPrice = np;
+      return { error: `Your organization has ${studentCount} students, but the ${np.name} plan supports up to ${np.max_students}. Remove students or choose a larger plan.`, code: 400 };
+    return { np };
   }
 
-  const pay = await verifyRenewalPayment(req, planForPrice, period);
-  if (!pay.ok) return res.status(402).json({ error: pay.error }); // 402 Payment Required
+  // ---- Mode: mid-cycle plan change (keep the renewal anchor, prorate) --------
+  if (switching && active) {
+    const t = await loadTargetPlan();
+    if (t.error) return res.status(t.code).json({ error: t.error });
+    const pay = await verifyRenewalPayment(req, t.np, 'change');
+    if (!pay.ok) return res.status(402).json({ error: pay.error });
+    const daysRemaining = daysUntil(org.subscription_expires_at);
+    const prorated = proratedTopUp(org.cur_monthly, t.np.price_monthly, daysRemaining);
+    const upgrade = (t.np.price_monthly || 0) > (org.cur_monthly || 0);
+    await run('UPDATE organizations SET plan_id = ? WHERE id = ?', [targetPlanId, org.id]); // expiry unchanged
+    await logAudit(req, {
+      action: 'subscription.change', entityType: 'organization', entityId: org.id, entityLabel: org.name,
+      details: `${upgrade ? 'Upgraded' : 'Changed'} ${org.plan_name} → ${t.np.name} mid-cycle; renewal date unchanged (${org.subscription_expires_at})${prorated ? `; prorated ₹${prorated} for ${daysRemaining} day(s)${pay.manual ? ' (manual — no gateway yet)' : ''}` : ''}`,
+    });
+    return res.json({ ok: true, mode: 'change', upgrade, planName: t.np.name, expiresAt: org.subscription_expires_at, prorated, daysRemaining, manual: !!pay.manual, switched: true });
+  }
 
+  // ---- Mode: fresh subscribe (expired) or renew (same plan) — needs a period -
+  const period = String(req.body.period || 'monthly');
+  if (!isPeriod(period)) return res.status(400).json({ error: 'Choose a valid billing period.' });
+  let planForPrice = { name: org.plan_name, price_monthly: org.cur_monthly, price_quarterly: org.cur_q, price_half_yearly: org.cur_h, price_yearly: org.cur_y };
+  if (switching) {
+    const t = await loadTargetPlan();
+    if (t.error) return res.status(t.code).json({ error: t.error });
+    planForPrice = t.np;
+  }
+  const pay = await verifyRenewalPayment(req, planForPrice, period);
+  if (!pay.ok) return res.status(402).json({ error: pay.error });
   const amount = periodPrice(planForPrice, period);
-  // Switching a plan starts a fresh term from today; renewing extends the current one.
   const newExpiry = extendExpiry(switching ? '' : org.subscription_expires_at, BILLING_PERIODS[period]);
   await tx(async (t) => {
     if (switching) await t.run('UPDATE organizations SET plan_id = ? WHERE id = ?', [targetPlanId, org.id]);
     await t.run('UPDATE organizations SET subscription_expires_at = ? WHERE id = ?', [newExpiry, org.id]);
   });
-  const verb = switching ? 'Subscribed' : 'Renewed';
   await logAudit(req, {
     action: switching ? 'subscription.subscribe' : 'subscription.renew', entityType: 'organization', entityId: org.id, entityLabel: org.name,
-    details: `${verb} ${planForPrice.name} (${period}${pay.manual ? ', manual — no payment gateway yet' : ''}) → expires ${newExpiry}${amount ? ` · ₹${amount}` : ''}`,
+    details: `${switching ? 'Subscribed' : 'Renewed'} ${planForPrice.name} (${period}${pay.manual ? ', manual — no gateway yet' : ''}) → expires ${newExpiry}${amount ? ` · ₹${amount}` : ''}`,
   });
-  res.json({ ok: true, expiresAt: newExpiry, period, amount, manual: !!pay.manual, planName: planForPrice.name, switched: !!switching });
+  res.json({ ok: true, mode: switching ? 'subscribe' : 'renew', planName: planForPrice.name, expiresAt: newExpiry, period, amount, manual: !!pay.manual, switched: !!switching });
 }));
 
 // List organizations with their teachers (signed up + pending) and counts.

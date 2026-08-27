@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { api } from '../api.js';
 import { Msg } from '../components.jsx';
 import { fmtPrice, fmtCap } from '../pages/AdminDashboard.jsx';
-import SubscribeModal, { periodLabel, fmtDate } from './SubscribeModal.jsx';
+import SubscribeModal, { renewResultMessage } from './SubscribeModal.jsx';
 
 // Root teachers can view their organization's plan and subscribe/renew.
 // Non-root teachers see the plans but can't change them.
@@ -17,7 +17,7 @@ export default function SubscriptionTab({ isRoot, embedded = false, onContact })
 
   function onSubscribed(r) {
     setSubscribeTo(null);
-    setMsg({ ok: true, text: `Your organization is now on the ${r.planName} plan (${periodLabel(r.period)}) — active until ${fmtDate(r.expiresAt)}.` });
+    setMsg({ ok: true, text: renewResultMessage(r) });
     load();
   }
 
