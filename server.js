@@ -846,34 +846,68 @@ app.post('/api/my-org/plan', requireRoot, h(async (req, res) => {
 
 // List organizations with their teachers (signed up + pending) and counts.
 // Optional ?q= filters by organization name (case-insensitive).
+// Paginated, filterable summary list of organizations for the admin grid.
+// Query params: q (name), plan (planId), status (active|expired|no_expiry|
+// over_limit), page (1-based), pageSize. Teachers are NOT included here — the
+// per-org detail endpoint returns those.
 app.get('/api/orgs', requireAdmin, h(async (req, res) => {
   const q = (req.query.q || '').trim();
-  const cols = 'o.id, o.name, o.plan_id, o.subscription_expires_at, p.name AS plan_name, p.max_students, p.price_monthly';
-  const orgs = q
-    ? await all(`SELECT ${cols} FROM organizations o LEFT JOIN plans p ON p.id = o.plan_id WHERE o.name ILIKE ? ESCAPE '\\' ORDER BY o.name`,
-        ['%' + q.replace(/[\\%_]/g, '\\$&') + '%'])
-    : await all(`SELECT ${cols} FROM organizations o LEFT JOIN plans p ON p.id = o.plan_id ORDER BY o.name`);
-  const result = [];
-  for (const o of orgs) {
-    const signedUp = await all(
-      "SELECT id, name, email, phone, is_root, disabled FROM users WHERE role = 'teacher' AND org_id = ? ORDER BY id", [o.id]
-    );
-    const pending = await all(
-      "SELECT name, email, phone, is_root, token FROM signup_tokens WHERE invite_role = 'teacher' AND used = 0 AND org_id = ? ORDER BY created_at DESC", [o.id]
-    );
-    // Billable student count = student slots provisioned (invites), matching the plan cap.
-    const studentCount = (await get("SELECT COUNT(*) AS c FROM signup_tokens WHERE invite_role = 'student' AND org_id = ?", [o.id])).c;
-    const teachers = [
-      ...signedUp.map((u) => ({ id: u.id, name: u.name, email: u.email, phone: u.phone, isRoot: !!u.is_root, disabled: !!u.disabled, signedUp: true, signupPath: null })),
-      ...pending.map((p) => ({ id: null, name: p.name, email: p.email, phone: p.phone, isRoot: !!p.is_root, disabled: false, signedUp: false, signupPath: `/signup?token=${p.token}` })),
-    ];
-    result.push({
+  const planFilter = Number(req.query.plan);
+  const status = String(req.query.status || '').trim();
+  const page = Math.max(1, Math.round(Number(req.query.page)) || 1);
+  const pageSize = Math.min(50, Math.max(5, Math.round(Number(req.query.pageSize)) || 10));
+  const today = new Date().toISOString().slice(0, 10);
+
+  const params = [];
+  const innerConds = ['1=1'];
+  if (q) { innerConds.push("o.name ILIKE ? ESCAPE '\\'"); params.push('%' + q.replace(/[\\%_]/g, '\\$&') + '%'); }
+  if (Number.isFinite(planFilter) && planFilter > 0) { innerConds.push('o.plan_id = ?'); params.push(planFilter); }
+  const inner = `
+    SELECT o.id, o.name, o.plan_id, o.subscription_expires_at,
+           p.name AS plan_name, p.max_students, p.price_monthly,
+           (SELECT COUNT(*) FROM users u WHERE u.role = 'teacher' AND u.org_id = o.id) AS teacher_count,
+           (SELECT COUNT(*) FROM signup_tokens st WHERE st.invite_role = 'student' AND st.org_id = o.id) AS student_count
+      FROM organizations o LEFT JOIN plans p ON p.id = o.plan_id
+     WHERE ${innerConds.join(' AND ')}`;
+
+  const outerConds = ['1=1'];
+  if (status === 'expired') { outerConds.push("x.subscription_expires_at <> '' AND x.subscription_expires_at < ?"); params.push(today); }
+  else if (status === 'active') { outerConds.push("x.subscription_expires_at <> '' AND x.subscription_expires_at >= ?"); params.push(today); }
+  else if (status === 'no_expiry') { outerConds.push("x.subscription_expires_at = ''"); }
+  else if (status === 'over_limit') { outerConds.push('x.max_students IS NOT NULL AND x.student_count > x.max_students'); }
+  const filtered = `SELECT * FROM (${inner}) x WHERE ${outerConds.join(' AND ')}`;
+
+  const total = (await get(`SELECT COUNT(*) AS c FROM (${filtered}) y`, params)).c;
+  const rows = await all(`${filtered} ORDER BY x.name LIMIT ? OFFSET ?`, [...params, pageSize, (page - 1) * pageSize]);
+  const orgs = rows.map((o) => ({
+    id: o.id, name: o.name, teacherCount: o.teacher_count, studentCount: o.student_count,
+    planId: o.plan_id, planName: o.plan_name, maxStudents: o.max_students, priceMonthly: o.price_monthly,
+    subscriptionUntil: o.subscription_expires_at || '', subscriptionExpired: isExpired(o.subscription_expires_at),
+  }));
+  res.json({ orgs, total, page, pageSize });
+}));
+
+// Full detail for one organization (incl. teachers) — the admin detail view.
+app.get('/api/orgs/:id', requireAdmin, h(async (req, res) => {
+  const o = await get(
+    `SELECT o.id, o.name, o.plan_id, o.subscription_expires_at, p.name AS plan_name, p.max_students, p.price_monthly
+       FROM organizations o LEFT JOIN plans p ON p.id = o.plan_id WHERE o.id = ?`, [Number(req.params.id)]
+  );
+  if (!o) return res.status(404).json({ error: 'Organization not found.' });
+  const signedUp = await all("SELECT id, name, email, phone, is_root, disabled FROM users WHERE role = 'teacher' AND org_id = ? ORDER BY id", [o.id]);
+  const pending = await all("SELECT name, email, phone, is_root, token FROM signup_tokens WHERE invite_role = 'teacher' AND used = 0 AND org_id = ? ORDER BY created_at DESC", [o.id]);
+  const studentCount = (await get("SELECT COUNT(*) AS c FROM signup_tokens WHERE invite_role = 'student' AND org_id = ?", [o.id])).c;
+  const teachers = [
+    ...signedUp.map((u) => ({ id: u.id, name: u.name, email: u.email, phone: u.phone, isRoot: !!u.is_root, disabled: !!u.disabled, signedUp: true, signupPath: null })),
+    ...pending.map((p) => ({ id: null, name: p.name, email: p.email, phone: p.phone, isRoot: !!p.is_root, disabled: false, signedUp: false, signupPath: `/signup?token=${p.token}` })),
+  ];
+  res.json({
+    org: {
       id: o.id, name: o.name, teachers, teacherCount: signedUp.length, studentCount,
       planId: o.plan_id, planName: o.plan_name, maxStudents: o.max_students, priceMonthly: o.price_monthly,
       subscriptionUntil: o.subscription_expires_at || '', subscriptionExpired: isExpired(o.subscription_expires_at),
-    });
-  }
-  res.json({ orgs: result });
+    },
+  });
 }));
 
 // Admin enables/disables any teacher (in any organization). A disabled teacher

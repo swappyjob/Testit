@@ -127,14 +127,18 @@ if ((await call(rootA, '/api/teachers/' + uB.id + '/reset-link', 'POST', undefin
   throw new Error('cross-org reset should be 404');
 ok('a root teacher cannot manage another organization’s teachers');
 
-// Admin view lists both orgs with their teachers.
-const orgs = (await call(admin, '/api/orgs')).data.orgs;
-const a = orgs.find((o) => o.id === orgA.id);
-const b = orgs.find((o) => o.id === orgB.id);
-if (!a || !b) throw new Error('admin should see both orgs');
-if (!a.teachers.some((t) => t.email === `rta${rand}@x.com`)) throw new Error('org A should list its root teacher');
+// Admin grid lists orgs (summary, no teachers); detail endpoint has teachers.
+const listing = (await call(admin, '/api/orgs')).data;
+if (!Array.isArray(listing.orgs) || typeof listing.total !== 'number' || typeof listing.pageSize !== 'number')
+  throw new Error('org listing should be paginated: { orgs, total, page, pageSize }');
+const a = listing.orgs.find((o) => o.id === orgA.id);
+const b = listing.orgs.find((o) => o.id === orgB.id);
+if (!a || !b) throw new Error('admin should see both orgs in the grid');
+if (a.teachers) throw new Error('the grid list should NOT embed teachers (summary only)');
 if (a.studentCount !== 1) throw new Error('org A should report 1 student, got ' + a.studentCount);
-ok('admin sees all organizations with their teachers and counts');
+const detailA = (await call(admin, '/api/orgs/' + orgA.id)).data.org;
+if (!detailA.teachers.some((t) => t.email === `rta${rand}@x.com`)) throw new Error('org A detail should list its root teacher');
+ok('admin sees a paginated org grid (summary) and full teachers via the detail endpoint');
 
 // --- Pricing plans ---
 const plans = (await call(admin, '/api/plans')).data.plans;
@@ -211,8 +215,8 @@ ok('admin can disable and re-enable teachers (non-admin blocked)');
 // Admin can edit a teacher (name, phone, role) — email is immutable.
 if ((await call(admin, '/api/admin/teachers/' + uA.id, 'PUT', { name: 'RootA Renamed', phone: '9123123123', isRoot: false, email: `hack${rand}@x.com` })).status !== 200)
   throw new Error('admin edit teacher should succeed');
-const editedOrgs = (await call(admin, '/api/orgs')).data.orgs.find((o) => o.id === orgA.id);
-const editedT = editedOrgs.teachers.find((t) => t.id === uA.id);
+const editedOrg = (await call(admin, '/api/orgs/' + orgA.id)).data.org;
+const editedT = editedOrg.teachers.find((t) => t.id === uA.id);
 if (editedT.name !== 'RootA Renamed' || editedT.phone !== '9123123123' || editedT.isRoot)
   throw new Error('teacher edit did not persist (name/phone/role)');
 if (editedT.email !== `rta${rand}@x.com`) throw new Error('teacher email must not change');
@@ -229,7 +233,28 @@ let found = (await call(admin, '/api/orgs?q=' + encodeURIComponent(uniq.toLowerC
 if (found.length !== 1 || found[0].id !== searchOrg.id) throw new Error('org search should find exactly the one org');
 if ((await call(admin, '/api/orgs?q=' + encodeURIComponent(`nomatch${rand}`))).data.orgs.length !== 0)
   throw new Error('no-match search should return empty');
-if ((await call(admin, '/api/orgs')).data.orgs.length < 3) throw new Error('empty query should return all orgs');
 ok('admin can search organizations by name (case-insensitive, server-side)');
+
+// Pagination: pageSize caps the page; page 2 has different orgs.
+const p1 = (await call(admin, '/api/orgs?pageSize=5&page=1')).data;
+if (p1.pageSize !== 5 || p1.orgs.length > 5) throw new Error('pageSize should cap the page to 5');
+if (p1.total >= 6) {
+  const p2 = (await call(admin, '/api/orgs?pageSize=5&page=2')).data;
+  if (p2.page !== 2) throw new Error('page param should be honoured');
+  const ids1 = new Set(p1.orgs.map((o) => o.id));
+  if (p2.orgs.some((o) => ids1.has(o.id))) throw new Error('page 2 must not repeat page 1 orgs');
+}
+ok('org grid supports pagination (page / pageSize, non-overlapping pages)');
+
+// Filter by plan returns only orgs on that plan.
+const freeId = plans.find((p) => p.name === 'Free').id;
+const byPlan = (await call(admin, '/api/orgs?plan=' + freeId)).data.orgs;
+if (byPlan.some((o) => o.planId !== freeId)) throw new Error('plan filter should only return orgs on that plan');
+ok('org grid filters by plan');
+
+// Detail endpoint: 404 unknown, 403 non-admin.
+if ((await call(admin, '/api/orgs/99999999', 'GET', undefined, false)).status !== 404) throw new Error('unknown org detail should be 404');
+if ((await call(rando, '/api/orgs/' + orgA.id, 'GET', undefined, false)).status !== 403) throw new Error('non-admin org detail should be 403');
+ok('org detail endpoint: 404 for unknown org, 403 for non-admin');
 
 console.log('\n✅ ADMIN-TEST: ALL CHECKS PASSED\n');

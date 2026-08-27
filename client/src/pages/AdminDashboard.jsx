@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
 import { api } from '../api.js';
 import { useRequireRole } from '../auth.js';
 import { DashboardBar, Modal, Msg, PasswordInput } from '../components.jsx';
@@ -10,26 +10,21 @@ export const fmtCap = (p) => (p.max_students == null ? 'Unlimited students' : `u
 
 export default function AdminDashboard() {
   const me = useRequireRole('admin', '/admin-login');
-  const [orgs, setOrgs] = useState(null);
   const [plans, setPlans] = useState([]);
-  const [query, setQuery] = useState('');
-  const [newOrg, setNewOrg] = useState('');
-  const [msg, setMsg] = useState(null);
   const [showProfile, setShowProfile] = useState(false);
   const [editingTeacher, setEditingTeacher] = useState(null);
-  const timer = useRef(null);
+  const [tab, setTab] = useState('orgs');
+  const orgTabRef = useRef(null);
 
-  const load = (q = query) => api('/api/orgs' + (q ? '?q=' + encodeURIComponent(q) : '')).then((d) => setOrgs(d.orgs));
   const loadPlans = () => api('/api/plans').then((d) => setPlans(d.plans));
-  useEffect(() => { if (me) { load(''); loadPlans(); } }, [me]);
-
-  function onSearch(v) { setQuery(v); clearTimeout(timer.current); timer.current = setTimeout(() => load(v), 250); }
-  async function createOrg() {
-    if (!newOrg.trim()) { setMsg({ ok: false, text: 'Enter an organization name.' }); return; }
-    try { await api('/api/orgs', 'POST', { name: newOrg.trim() }); setNewOrg(''); setQuery(''); setMsg({ ok: true, text: 'Organization created.' }); load(''); }
-    catch (e) { setMsg({ ok: false, text: e.message }); }
-  }
+  useEffect(() => { if (me) loadPlans(); }, [me]);
   if (!me) return null;
+
+  const Tab = ({ id, label, icon }) => (
+    <button className={'tab' + (tab === id ? ' active' : '')} onClick={() => setTab(id)}>
+      <span aria-hidden="true">{icon}</span> {label}
+    </button>
+  );
 
   return (
     <>
@@ -37,37 +32,160 @@ export default function AdminDashboard() {
         <button className="btn ghost small" onClick={() => setShowProfile(true)}>⚙ Profile</button>
       </DashboardBar>
       <div className="container">
-        <div className="card">
-          <h1>Organizations</h1>
-          <p className="muted">Create organizations, then add a root teacher to each. Root teachers manage their own teachers and students.</p>
-          {msg && <Msg text={msg.text} kind={msg.ok ? 'ok' : 'error'} />}
-          <div className="row" style={{ alignItems: 'flex-end' }}>
-            <div style={{ flex: 1 }}><label>New organization name</label><input type="text" value={newOrg} onChange={(e) => setNewOrg(e.target.value)} placeholder="e.g. Springfield High" /></div>
-            <button className="btn" onClick={createOrg}>Create organization</button>
-          </div>
-          <input type="text" value={query} onChange={(e) => onSearch(e.target.value)} placeholder="🔍 Search organizations by name..." style={{ marginTop: 14 }} />
+        <div className="tabs">
+          <Tab id="orgs" label="Organizations" icon="🏢" />
+          <Tab id="plans" label="Plans" icon="💳" />
+          <Tab id="admins" label="Admins" icon="🛡️" />
+          <Tab id="support" label="Support" icon="🎫" />
         </div>
 
-        <AdminsCard />
-
-        <SupportAgentsCard />
-
-        <PlansCard plans={plans} onChanged={() => { loadPlans(); load(query); }} />
-
-        {orgs === null ? (
-          <div className="card"><p className="muted">Loading…</p></div>
-        ) : orgs.length === 0 ? (
-          <div className="card"><p className="muted">{query ? `No organizations match “${query}”.` : 'No organizations yet. Create one above.'}</p></div>
-        ) : (
-          orgs.map((o) => <OrgCard key={o.id} org={o} plans={plans} onChanged={() => load(query)} onEditTeacher={setEditingTeacher} />)
-        )}
+        {tab === 'orgs' && <OrganizationsTab ref={orgTabRef} plans={plans} onEditTeacher={setEditingTeacher} />}
+        {tab === 'plans' && <PlansCard plans={plans} onChanged={loadPlans} />}
+        {tab === 'admins' && <AdminsCard />}
+        {tab === 'support' && <SupportAgentsCard />}
       </div>
 
-      {editingTeacher && <EditTeacherModal teacher={editingTeacher} onClose={() => setEditingTeacher(null)} onSaved={() => { setEditingTeacher(null); load(query); }} />}
+      {editingTeacher && <EditTeacherModal teacher={editingTeacher} onClose={() => setEditingTeacher(null)} onSaved={() => { setEditingTeacher(null); orgTabRef.current && orgTabRef.current.refresh(); }} />}
       {showProfile && <ProfileModal me={me} onClose={() => setShowProfile(false)} />}
     </>
   );
 }
+
+// Organizations: a searchable, filterable, paginated grid. Clicking a row opens
+// that organization's detail/management view.
+const OrganizationsTab = forwardRef(function OrganizationsTab({ plans, onEditTeacher }, ref) {
+  const [q, setQ] = useState('');
+  const [planFilter, setPlanFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const [data, setData] = useState(null); // { orgs, total, page, pageSize }
+  const [selectedId, setSelectedId] = useState(null);
+  const [newOrg, setNewOrg] = useState('');
+  const [msg, setMsg] = useState(null);
+  const timer = useRef(null);
+
+  const load = () => {
+    const params = new URLSearchParams();
+    if (q.trim()) params.set('q', q.trim());
+    if (planFilter) params.set('plan', planFilter);
+    if (statusFilter) params.set('status', statusFilter);
+    params.set('page', String(page));
+    params.set('pageSize', String(pageSize));
+    return api('/api/orgs?' + params.toString()).then(setData).catch(() => setData({ orgs: [], total: 0, page: 1, pageSize }));
+  };
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [planFilter, statusFilter, page, pageSize]);
+  useEffect(() => { clearTimeout(timer.current); timer.current = setTimeout(() => { setPage(1); load(); }, 250); return () => clearTimeout(timer.current); /* eslint-disable-next-line */ }, [q]);
+  useImperativeHandle(ref, () => ({ refresh: load }), [q, planFilter, statusFilter, page, pageSize]);
+
+  async function createOrg() {
+    if (!newOrg.trim()) { setMsg({ ok: false, text: 'Enter an organization name.' }); return; }
+    try { await api('/api/orgs', 'POST', { name: newOrg.trim() }); setNewOrg(''); setQ(''); setPage(1); setMsg({ ok: true, text: 'Organization created.' }); load(); }
+    catch (e) { setMsg({ ok: false, text: e.message }); }
+  }
+
+  if (selectedId) {
+    return <OrgDetail id={selectedId} plans={plans} onEditTeacher={onEditTeacher} onBack={() => { setSelectedId(null); load(); }} />;
+  }
+
+  const orgs = data ? data.orgs : [];
+  const total = data ? data.total : 0;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const from = total === 0 ? 0 : (page - 1) * pageSize + 1;
+  const to = Math.min(total, page * pageSize);
+  const filtering = !!(q.trim() || planFilter || statusFilter);
+
+  return (
+    <>
+      <div className="card">
+        <h1 style={{ marginTop: 0 }}>Organizations</h1>
+        <p className="muted">Create organizations, then add a root teacher to each. Click a row to manage an organization.</p>
+        {msg && <Msg text={msg.text} kind={msg.ok ? 'ok' : 'error'} />}
+        <div className="row" style={{ alignItems: 'flex-end' }}>
+          <div style={{ flex: 1 }}><label>New organization name</label><input type="text" value={newOrg} onChange={(e) => setNewOrg(e.target.value)} placeholder="e.g. Springfield High"
+            onKeyDown={(e) => { if (e.key === 'Enter') createOrg(); }} /></div>
+          <button className="btn" onClick={createOrg}>Create organization</button>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="row" style={{ gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <div style={{ flex: '2 1 240px' }}>
+            <label>Search</label>
+            <input type="text" value={q} onChange={(e) => setQ(e.target.value)} placeholder="🔍 Search by organization name..." />
+          </div>
+          <div style={{ flex: '1 1 160px' }}>
+            <label>Plan</label>
+            <select value={planFilter} onChange={(e) => { setPage(1); setPlanFilter(e.target.value); }}>
+              <option value="">All plans</option>
+              {plans.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </div>
+          <div style={{ flex: '1 1 160px' }}>
+            <label>Subscription</label>
+            <select value={statusFilter} onChange={(e) => { setPage(1); setStatusFilter(e.target.value); }}>
+              <option value="">Any status</option>
+              <option value="active">Active (has expiry)</option>
+              <option value="expired">Expired</option>
+              <option value="no_expiry">No expiry</option>
+              <option value="over_limit">Over student limit</option>
+            </select>
+          </div>
+          {filtering && <button className="btn ghost small" onClick={() => { setQ(''); setPlanFilter(''); setStatusFilter(''); setPage(1); }}>Clear filters</button>}
+        </div>
+
+        {data === null ? (
+          <p className="muted" style={{ marginTop: 16 }}>Loading…</p>
+        ) : orgs.length === 0 ? (
+          <p className="muted" style={{ marginTop: 16 }}>{filtering ? 'No organizations match your search / filters.' : 'No organizations yet. Create one above.'}</p>
+        ) : (
+          <div style={{ overflowX: 'auto', marginTop: 12 }}>
+            <table>
+              <thead><tr><th>Organization</th><th>Plan</th><th>Teachers</th><th>Students</th><th>Subscription</th></tr></thead>
+              <tbody>
+                {orgs.map((o) => {
+                  const over = o.maxStudents != null && o.studentCount > o.maxStudents;
+                  return (
+                    <tr key={o.id} onClick={() => setSelectedId(o.id)} style={{ cursor: 'pointer' }} title="Open organization">
+                      <td><b>{o.name}</b></td>
+                      <td>{o.planName ? <span className="pill brand">{o.planName}</span> : <span className="muted">—</span>}</td>
+                      <td>{o.teacherCount}</td>
+                      <td style={{ color: over ? 'var(--red)' : undefined }}>{o.studentCount}{o.maxStudents != null ? ' / ' + o.maxStudents : ''}{over ? ' ⚠' : ''}</td>
+                      <td>{o.subscriptionUntil
+                        ? (o.subscriptionExpired ? <span className="pill amber">expired</span> : <span className="pill green">until {o.subscriptionUntil}</span>)
+                        : <span className="pill gray">no expiry</span>}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {total > 0 && (
+          <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', marginTop: 14, flexWrap: 'wrap', gap: 8 }}>
+            <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+              <span className="muted" style={{ fontSize: 13 }}>Showing {from}–{to} of {total} organization{total === 1 ? '' : 's'}</span>
+              <label className="muted" style={{ fontSize: 13, margin: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
+                · Rows
+                <select value={pageSize} onChange={(e) => { setPage(1); setPageSize(Number(e.target.value)); }} style={{ width: 'auto', padding: '4px 8px' }}>
+                  <option value={10}>10</option>
+                  <option value={25}>25</option>
+                  <option value={50}>50</option>
+                </select>
+              </label>
+            </div>
+            <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+              <button className="btn ghost small" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>← Prev</button>
+              <span className="muted" style={{ fontSize: 13 }}>Page {page} of {totalPages}</span>
+              <button className="btn ghost small" disabled={page >= totalPages} onClick={() => setPage((p) => Math.min(totalPages, p + 1))}>Next →</button>
+            </div>
+          </div>
+        )}
+      </div>
+    </>
+  );
+});
 
 // Platform admins: list and create additional admins.
 function AdminsCard() {
@@ -240,41 +358,44 @@ function PlanEditor({ plan, onClose, onSaved }) {
   );
 }
 
-function OrgCard({ org, plans, onChanged, onEditTeacher }) {
+function OrgDetail({ id, plans, onEditTeacher, onBack }) {
   const confirm = useConfirm();
+  const [org, setOrg] = useState(null);
   const [renaming, setRenaming] = useState(false);
-  const [name, setName] = useState(org.name);
-  const [subUntil, setSubUntil] = useState(org.subscriptionUntil || '');
+  const [name, setName] = useState('');
+  const [subUntil, setSubUntil] = useState('');
   const [form, setForm] = useState({ name: '', email: '', phone: '' });
   const [msg, setMsg] = useState(null);
 
+  const reload = () => api('/api/orgs/' + id).then((d) => { setOrg(d.org); setName(d.org.name); setSubUntil(d.org.subscriptionUntil || ''); });
+  useEffect(() => { reload(); /* eslint-disable-next-line */ }, [id]);
+
   async function saveRename() {
-    try { await api('/api/orgs/' + org.id, 'PUT', { name }); setRenaming(false); onChanged(); }
+    try { await api('/api/orgs/' + id, 'PUT', { name }); setRenaming(false); reload(); }
     catch (e) { setMsg({ ok: false, text: e.message }); }
   }
   async function changePlan(planId) {
-    try { await api('/api/orgs/' + org.id + '/plan', 'PUT', { planId: Number(planId) }); onChanged(); }
+    try { await api('/api/orgs/' + id + '/plan', 'PUT', { planId: Number(planId) }); reload(); }
     catch (e) { setMsg({ ok: false, text: e.message }); }
   }
   async function saveSubscription(value) {
     try {
-      await api('/api/orgs/' + org.id + '/subscription', 'PUT', { expiresAt: value });
+      await api('/api/orgs/' + id + '/subscription', 'PUT', { expiresAt: value });
       setMsg({ ok: true, text: value ? `Subscription set to expire on ${value}.` : 'Subscription expiry cleared (no expiry).' });
-      onChanged();
+      reload();
     } catch (e) { setMsg({ ok: false, text: e.message }); }
   }
-  const overLimit = org.maxStudents != null && org.studentCount > org.maxStudents;
   async function addRoot() {
     try {
-      await api('/api/admin/root-teachers', 'POST', { orgId: org.id, ...form });
+      await api('/api/admin/root-teachers', 'POST', { orgId: id, ...form });
       setForm({ name: '', email: '', phone: '' });
-      setMsg({ ok: true, text: 'Root teacher created. Copy their signup link from the table above.' });
-      onChanged();
+      setMsg({ ok: true, text: 'Root teacher created. Copy their signup link from the table below.' });
+      reload();
     } catch (e) { setMsg({ ok: false, text: e.message }); }
   }
   async function toggle(t) {
     if (!t.disabled && !(await confirm({ title: `Disable ${t.name}?`, body: 'They will be logged out immediately and cannot log in until you re-enable them.', confirmLabel: 'Disable', danger: true }))) return;
-    try { await api('/api/admin/teachers/' + t.id, 'PATCH', { disabled: !t.disabled }); onChanged(); }
+    try { await api('/api/admin/teachers/' + t.id, 'PATCH', { disabled: !t.disabled }); reload(); }
     catch (e) { setMsg({ ok: false, text: e.message }); }
   }
   async function copy(text, btn) {
@@ -290,8 +411,17 @@ function OrgCard({ org, plans, onChanged, onEditTeacher }) {
     } catch (e) { setMsg({ ok: false, text: e.message }); }
   }
 
+  if (!org) return (
+    <div>
+      <button className="btn ghost small" onClick={onBack}>← Back to organizations</button>
+      <div className="card" style={{ marginTop: 12 }}><p className="muted">Loading…</p></div>
+    </div>
+  );
+  const overLimit = org.maxStudents != null && org.studentCount > org.maxStudents;
   return (
-    <div className="card">
+    <div>
+      <button className="btn ghost small" onClick={onBack}>← Back to organizations</button>
+      <div className="card" style={{ marginTop: 12 }}>
       <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
         {renaming ? (
           <div className="row" style={{ alignItems: 'center', gap: 8 }}>
@@ -305,7 +435,6 @@ function OrgCard({ org, plans, onChanged, onEditTeacher }) {
             <button className="btn ghost small" onClick={() => setRenaming(true)}>Rename</button>
           </div>
         )}
-        <span className="muted">{org.teacherCount} teacher(s)</span>
       </div>
       {msg && <Msg text={msg.text} kind={msg.ok ? 'ok' : 'error'} />}
 
@@ -373,6 +502,7 @@ function OrgCard({ org, plans, onChanged, onEditTeacher }) {
         <div><label>Phone number</label><input type="tel" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="e.g. +91 98765 43210" /></div>
       </div>
       <div style={{ marginTop: 12 }}><button className="btn secondary" onClick={addRoot}>Create root teacher &amp; get link</button></div>
+      </div>
     </div>
   );
 }
