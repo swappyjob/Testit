@@ -22,6 +22,7 @@ export default function TeacherDashboard() {
   const [profilePane, setProfilePane] = useState('account');
   const [orgPlan, setOrgPlan] = useState(null); // { plan, studentCount, plans }
   const [limitDismissed, setLimitDismissed] = useState(false);
+  const [expiryDismissed, setExpiryDismissed] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -39,6 +40,12 @@ export default function TeacherDashboard() {
   const showLimitBanner = (atLimit || nearLimit) && !limitDismissed;
 
   const readOnly = !!me.subscriptionExpired;
+  // Warn when the subscription is within 3 days of expiring (renew before service is interrupted).
+  const subUntil = me.subscriptionUntil || '';
+  const daysToExpiry = subUntil && !isNaN(new Date(subUntil)) ? Math.ceil((new Date(subUntil).getTime() - Date.now()) / 86400000) : null;
+  const expiryLabel = subUntil ? new Date(subUntil).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+  const showExpiryBanner = !readOnly && daysToExpiry != null && daysToExpiry <= 3 && !expiryDismissed;
+
   const openCreate = () => { if (readOnly) return; setEditTestId(null); setDraftId(null); setTab('create'); };
   const openEdit = (id) => { setEditTestId(id); setDraftId(null); setTab('create'); };
   const openDraft = (id) => { setEditTestId(null); setDraftId(id); setTab('create'); };
@@ -59,6 +66,19 @@ export default function TeacherDashboard() {
         <button className="btn ghost small" onClick={() => openProfile('account')}>⚙ Profile</button>
       </DashboardBar>
       <div className="container">
+        {showExpiryBanner && (
+          <div className="msg" style={{ background: '#fef3c7', color: '#92400e', display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 20 }}>⏳</span>
+            <span style={{ flex: 1 }}>
+              <b>Your subscription {daysToExpiry <= 0 ? 'expires today' : daysToExpiry === 1 ? 'expires tomorrow' : `expires in ${daysToExpiry} days`}{expiryLabel ? ` (on ${expiryLabel})` : ''}.</b>{' '}
+              Renew now to keep uninterrupted access for your students.{' '}
+              {me.isRoot
+                ? <a href="#" onClick={(e) => { e.preventDefault(); setTab('support'); }}>Contact us to renew →</a>
+                : <span>Ask a root teacher or your administrator to renew.</span>}
+            </span>
+            <button className="btn ghost small" onClick={() => setExpiryDismissed(true)}>Dismiss</button>
+          </div>
+        )}
         {showLimitBanner && (
           <div className="msg" style={{ background: atLimit ? '#fee2e2' : '#fef3c7', color: atLimit ? '#991b1b' : '#92400e', display: 'flex', alignItems: 'center', gap: 10 }}>
             <span style={{ fontSize: 20 }}>{atLimit ? '🚫' : '⚠️'}</span>
