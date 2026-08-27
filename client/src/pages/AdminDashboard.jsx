@@ -317,13 +317,19 @@ function PlanEditor({ plan, onClose, onSaved }) {
   const [unlimited, setUnlimited] = useState(plan.max_students == null && !isNew);
   const [maxStudents, setMaxStudents] = useState(plan.max_students != null ? String(plan.max_students) : '');
   const [priceMonthly, setPriceMonthly] = useState(plan.price_monthly != null ? String(plan.price_monthly) : '0');
+  const [priceQuarterly, setPriceQuarterly] = useState(plan.price_quarterly ? String(plan.price_quarterly) : '');
+  const [priceHalfYearly, setPriceHalfYearly] = useState(plan.price_half_yearly ? String(plan.price_half_yearly) : '');
+  const [priceYearly, setPriceYearly] = useState(plan.price_yearly ? String(plan.price_yearly) : '');
   const [sortOrder, setSortOrder] = useState(plan.sort_order != null ? String(plan.sort_order) : '');
   const [msg, setMsg] = useState(null);
   const [busy, setBusy] = useState(false);
 
   async function save() {
     setBusy(true); setMsg(null);
-    const body = { name, unlimited, maxStudents: Number(maxStudents), priceMonthly: Number(priceMonthly), sortOrder: Number(sortOrder) || 0 };
+    const body = {
+      name, unlimited, maxStudents: Number(maxStudents), priceMonthly: Number(priceMonthly), sortOrder: Number(sortOrder) || 0,
+      priceQuarterly: Number(priceQuarterly) || 0, priceHalfYearly: Number(priceHalfYearly) || 0, priceYearly: Number(priceYearly) || 0,
+    };
     try {
       if (isNew) await api('/api/plans', 'POST', body);
       else await api('/api/plans/' + plan.id, 'PUT', body);
@@ -338,6 +344,15 @@ function PlanEditor({ plan, onClose, onSaved }) {
       <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Standard" />
       <label>Price (₹ per month)</label>
       <input type="number" min="0" step="1" value={priceMonthly} onChange={(e) => setPriceMonthly(e.target.value)} placeholder="0 = Free" style={{ width: 200 }} />
+
+      <label style={{ marginTop: 12 }}>Billing-period prices (₹) — optional</label>
+      <p className="muted" style={{ fontSize: 12, margin: '0 0 8px' }}>Set a discounted price for a longer commitment. Leave blank to auto-calculate (monthly × months).</p>
+      <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
+        <div><label style={{ fontSize: 13 }}>Quarterly</label><input type="number" min="0" step="1" value={priceQuarterly} onChange={(e) => setPriceQuarterly(e.target.value)} placeholder="auto" style={{ width: 130 }} /></div>
+        <div><label style={{ fontSize: 13 }}>Half-yearly</label><input type="number" min="0" step="1" value={priceHalfYearly} onChange={(e) => setPriceHalfYearly(e.target.value)} placeholder="auto" style={{ width: 130 }} /></div>
+        <div><label style={{ fontSize: 13 }}>Annual</label><input type="number" min="0" step="1" value={priceYearly} onChange={(e) => setPriceYearly(e.target.value)} placeholder="auto" style={{ width: 130 }} /></div>
+      </div>
+
       <label className="choice" style={{ marginTop: 12 }}>
         <input type="checkbox" checked={unlimited} onChange={(e) => setUnlimited(e.target.checked)} />
         Unlimited students (custom / enterprise plan)

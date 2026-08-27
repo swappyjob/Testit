@@ -710,13 +710,43 @@ app.post('/api/orgs', requireAdmin, h(async (req, res) => {
 }));
 
 // List the available pricing plans.
+// ---- Billing periods (subscription renewal) --------------------------------
+const BILLING_PERIODS = { monthly: 1, quarterly: 3, half_yearly: 6, yearly: 12 };
+const isPeriod = (p) => Object.prototype.hasOwnProperty.call(BILLING_PERIODS, p);
+// Price for a plan on a given period. An admin can set an explicit (discounted)
+// per-period price; when it's 0 the price is derived as monthly × months.
+function periodPrice(plan, period) {
+  const months = BILLING_PERIODS[period];
+  if (!months) return null;
+  const explicit = { quarterly: plan.price_quarterly, half_yearly: plan.price_half_yearly, yearly: plan.price_yearly }[period];
+  if (period !== 'monthly' && explicit > 0) return explicit;
+  return (plan.price_monthly || 0) * months;
+}
+// All period prices for a plan, for the renewal UI.
+function planPricing(plan) {
+  const out = {};
+  for (const p of Object.keys(BILLING_PERIODS)) out[p] = plan == null || plan.price_monthly == null ? null : periodPrice(plan, p);
+  return out;
+}
+// Extend a subscription by `months` from the later of today or the current
+// expiry, returned as a YYYY-MM-DD string.
+function extendExpiry(currentExpiry, months) {
+  const now = new Date();
+  const cur = currentExpiry ? new Date(currentExpiry) : null;
+  const base = cur && !isNaN(cur) && cur.getTime() > now.getTime() ? cur : now;
+  const d = new Date(base.getTime());
+  d.setMonth(d.getMonth() + months);
+  return d.toISOString().slice(0, 10);
+}
+const PLAN_COLS = 'p.id, p.name, p.max_students, p.price_monthly, p.price_quarterly, p.price_half_yearly, p.price_yearly, p.sort_order';
+
 app.get('/api/plans', requireAdmin, h(async (req, res) => {
   const plans = await all(
-    `SELECT p.id, p.name, p.max_students, p.price_monthly, p.sort_order,
+    `SELECT ${PLAN_COLS},
             (SELECT COUNT(*) FROM organizations o WHERE o.plan_id = p.id) AS org_count
        FROM plans p ORDER BY p.sort_order, p.id`
   );
-  res.json({ plans });
+  res.json({ plans: plans.map((p) => ({ ...p, pricing: planPricing(p) })) });
 }));
 
 // Validate + normalize a plan payload from the admin plan editor.
@@ -726,10 +756,15 @@ function readPlanBody(body) {
   const maxStudents = unlimited ? null : Math.round(Number(body.maxStudents));
   const price = Math.round(Number(body.priceMonthly));
   const sortOrder = Number.isFinite(Number(body.sortOrder)) ? Math.round(Number(body.sortOrder)) : 0;
+  // Optional per-period prices (0 / blank = derive from monthly).
+  const nn = (v) => { const n = Math.round(Number(v)); return Number.isFinite(n) && n > 0 ? n : 0; };
+  const priceQuarterly = nn(body.priceQuarterly);
+  const priceHalfYearly = nn(body.priceHalfYearly);
+  const priceYearly = nn(body.priceYearly);
   if (!name) return { error: 'Plan name is required.' };
   if (!unlimited && (!Number.isFinite(maxStudents) || maxStudents < 1)) return { error: 'Student cap must be a positive number (or mark the plan Unlimited).' };
   if (!Number.isFinite(price) || price < 0) return { error: 'Price must be 0 or more (in rupees per month).' };
-  return { name, maxStudents, price, sortOrder };
+  return { name, maxStudents, price, sortOrder, priceQuarterly, priceHalfYearly, priceYearly };
 }
 
 // Admin creates a pricing plan.
@@ -739,8 +774,8 @@ app.post('/api/plans', requireAdmin, h(async (req, res) => {
   if (await get('SELECT id FROM plans WHERE LOWER(name) = LOWER(?)', [p.name]))
     return res.status(409).json({ error: 'A plan with that name already exists.' });
   const id = (await run(
-    'INSERT INTO plans (name, max_students, price_monthly, sort_order) VALUES (?, ?, ?, ?) RETURNING id',
-    [p.name, p.maxStudents, p.price, p.sortOrder]
+    'INSERT INTO plans (name, max_students, price_monthly, sort_order, price_quarterly, price_half_yearly, price_yearly) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id',
+    [p.name, p.maxStudents, p.price, p.sortOrder, p.priceQuarterly, p.priceHalfYearly, p.priceYearly]
   )).rows[0].id;
   res.json({ id });
 }));
@@ -753,8 +788,8 @@ app.put('/api/plans/:id', requireAdmin, h(async (req, res) => {
   if (p.error) return res.status(400).json({ error: p.error });
   if (await get('SELECT id FROM plans WHERE LOWER(name) = LOWER(?) AND id <> ?', [p.name, id]))
     return res.status(409).json({ error: 'A plan with that name already exists.' });
-  await run('UPDATE plans SET name = ?, max_students = ?, price_monthly = ?, sort_order = ? WHERE id = ?',
-    [p.name, p.maxStudents, p.price, p.sortOrder, id]);
+  await run('UPDATE plans SET name = ?, max_students = ?, price_monthly = ?, sort_order = ?, price_quarterly = ?, price_half_yearly = ?, price_yearly = ? WHERE id = ?',
+    [p.name, p.maxStudents, p.price, p.sortOrder, p.priceQuarterly, p.priceHalfYearly, p.priceYearly, id]);
   res.json({ ok: true });
 }));
 
@@ -814,17 +849,24 @@ app.post('/api/admins', requireAdmin, h(async (req, res) => {
   res.json({ id, name, email });
 }));
 
-// A teacher views their own organization's current plan, usage, and all plans.
+// A teacher views their own organization's current plan, usage, all plans, and
+// the current subscription expiry (for the renewal flow).
 app.get('/api/my-org/plan', requireAuth('teacher'), h(async (req, res) => {
-  const plan = await get(
-    'SELECT p.id, p.name, p.max_students, p.price_monthly FROM organizations o LEFT JOIN plans p ON p.id = o.plan_id WHERE o.id = ?',
+  const org = await get(
+    `SELECT o.subscription_expires_at, ${PLAN_COLS}
+       FROM organizations o LEFT JOIN plans p ON p.id = o.plan_id WHERE o.id = ?`,
     [req.user.org_id]
   );
+  const plan = org && org.id ? { id: org.id, name: org.name, max_students: org.max_students, price_monthly: org.price_monthly, price_quarterly: org.price_quarterly, price_half_yearly: org.price_half_yearly, price_yearly: org.price_yearly, pricing: planPricing(org) } : null;
   const studentCount = (await get(
     "SELECT COUNT(*) AS c FROM signup_tokens WHERE invite_role = 'student' AND org_id = ?", [req.user.org_id]
   )).c;
-  const plans = await all('SELECT id, name, max_students, price_monthly FROM plans ORDER BY sort_order');
-  res.json({ plan: plan && plan.id ? plan : null, studentCount, plans });
+  const plans = (await all(`SELECT ${PLAN_COLS} FROM plans p ORDER BY p.sort_order`)).map((p) => ({ ...p, pricing: planPricing(p) }));
+  res.json({
+    plan, studentCount, plans,
+    subscriptionUntil: org ? (org.subscription_expires_at || '') : '',
+    subscriptionExpired: isExpired(org && org.subscription_expires_at),
+  });
 }));
 
 // A root teacher subscribes their organization to a different plan (self-service).
@@ -842,6 +884,48 @@ app.post('/api/my-org/plan', requireRoot, h(async (req, res) => {
     return res.status(400).json({ error: `Your organization has ${studentCount} students, but the ${plan.name} plan supports up to ${plan.max_students}. Remove students or choose a larger plan.` });
   await run('UPDATE organizations SET plan_id = ? WHERE id = ?', [planId, req.user.org_id]);
   res.json({ ok: true });
+}));
+
+// ---------------------------------------------------------------------------
+// PAYMENT INTEGRATION SEAM.
+// When a payment gateway (e.g. Razorpay) is added, this is where a renewal
+// payment is verified before the subscription is extended:
+//   1. A separate endpoint creates a payment order for the chosen plan+period.
+//   2. The gateway's checkout collects payment on the client.
+//   3. This function verifies the signed payment reference server-side.
+// Until that exists, PAYMENTS_ENABLED is off and renewal proceeds directly
+// (a manual/complimentary renewal, recorded in the audit log). Set the env var
+// PAYMENTS_ENABLED=1 only once real verification is wired in below.
+const PAYMENTS_ENABLED = process.env.PAYMENTS_ENABLED === '1';
+async function verifyRenewalPayment(/* req, plan, period */) {
+  if (!PAYMENTS_ENABLED) return { ok: true, manual: true };
+  // TODO: verify req.body.paymentRef against the gateway (signature + amount).
+  return { ok: false, error: 'Payment verification is not configured yet.' };
+}
+
+// A root teacher renews (extends) their organization's subscription for a chosen
+// billing period. Works even while read-only/expired (that's the point).
+app.post('/api/my-org/renew', requireRoot, h(async (req, res) => {
+  const period = String(req.body.period || 'monthly');
+  if (!isPeriod(period)) return res.status(400).json({ error: 'Choose a valid billing period.' });
+  const org = await get(
+    `SELECT o.id, o.name, o.subscription_expires_at, p.name AS plan_name, p.price_monthly, p.price_quarterly, p.price_half_yearly, p.price_yearly
+       FROM organizations o LEFT JOIN plans p ON p.id = o.plan_id WHERE o.id = ?`,
+    [req.user.org_id]
+  );
+  if (!org) return res.status(404).json({ error: 'Organization not found.' });
+
+  const pay = await verifyRenewalPayment(req, org, period);
+  if (!pay.ok) return res.status(402).json({ error: pay.error }); // 402 Payment Required
+
+  const amount = periodPrice(org, period);
+  const newExpiry = extendExpiry(org.subscription_expires_at, BILLING_PERIODS[period]);
+  await run('UPDATE organizations SET subscription_expires_at = ? WHERE id = ?', [newExpiry, org.id]);
+  await logAudit(req, {
+    action: 'subscription.renew', entityType: 'organization', entityId: org.id, entityLabel: org.name,
+    details: `Renewed (${period}${pay.manual ? ', manual — no payment gateway yet' : ''}) → expires ${newExpiry}${amount ? ` · ₹${amount}` : ''}`,
+  });
+  res.json({ ok: true, expiresAt: newExpiry, period, amount, manual: !!pay.manual });
 }));
 
 // List organizations with their teachers (signed up + pending) and counts.

@@ -95,4 +95,32 @@ if ((await call(root, '/api/tests')).data.tests.length < 1) throw new Error('rea
 if ((await call(root, '/api/students')).status !== 200) throw new Error('reading students should still work');
 ok('expired: reading tests and students still works (read-only)');
 
+// A root teacher can renew even while expired, which lifts read-only.
+const badPeriod = await call(root, '/api/my-org/renew', 'POST', { period: 'weekly' }, false);
+if (badPeriod.status !== 400) throw new Error('an invalid billing period should be rejected (400)');
+const renew = await call(root, '/api/my-org/renew', 'POST', { period: 'monthly' });
+if (renew.status !== 200 || !renew.data.expiresAt) throw new Error('renew should return the new expiry date');
+const today = new Date().toISOString().slice(0, 10);
+if (!(renew.data.expiresAt > today)) throw new Error('renewed expiry should be in the future: ' + renew.data.expiresAt);
+ok('a root teacher renews the subscription (invalid period rejected; valid one extends the expiry)');
+
+if ((await call(root, '/api/me')).data.user.subscriptionExpired) throw new Error('after renewal the org should no longer be expired');
+if ((await call(root, '/api/tests', 'POST', { title: 'Post-renew', questions: Q })).status !== 200)
+  throw new Error('after renewal, creating a test should work again');
+ok('after renewal the organization is active again and writes are restored');
+
+// Annual renewal lands roughly a year out (≈ 335+ days).
+const yr = (await call(root, '/api/my-org/renew', 'POST', { period: 'yearly' })).data;
+const daysOut = Math.round((new Date(yr.expiresAt).getTime() - Date.now()) / 86400000);
+if (daysOut < 300) throw new Error('annual renewal should extend ~1 year, got ' + daysOut + ' days');
+ok('billing periods extend the subscription by the right length (annual ≈ 1 year)');
+
+// A non-root teacher cannot renew.
+const nonRoot = makeJar();
+const inv = (await call(root, '/api/teachers', 'POST', { name: 'NR', email: `nr${rand}@x.com`, phone: '9000000001', isRoot: false })).data;
+await call(nonRoot, '/api/signup/' + new URLSearchParams(inv.signupPath.split('?')[1]).get('token'), 'POST', { password: 'pass123' });
+if ((await call(nonRoot, '/api/my-org/renew', 'POST', { period: 'monthly' }, false)).status !== 403)
+  throw new Error('a non-root teacher must not be able to renew');
+ok('only a root teacher can renew (non-root blocked)');
+
 console.log('\n✅ SUBSCRIPTION-TEST: ALL CHECKS PASSED\n');

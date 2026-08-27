@@ -331,6 +331,12 @@ async function init() {
   // The slot a student booked for a slot-scheduled test (NULL = not booked yet).
   await pool.query('ALTER TABLE assignments ADD COLUMN IF NOT EXISTS slot_id INTEGER REFERENCES test_slots(id) ON DELETE SET NULL');
 
+  // Optional per-period pricing for a plan (0 = derive from the monthly price).
+  // Lets an admin offer discounted quarterly / half-yearly / annual billing.
+  await pool.query('ALTER TABLE plans ADD COLUMN IF NOT EXISTS price_quarterly INTEGER NOT NULL DEFAULT 0');
+  await pool.query('ALTER TABLE plans ADD COLUMN IF NOT EXISTS price_half_yearly INTEGER NOT NULL DEFAULT 0');
+  await pool.query('ALTER TABLE plans ADD COLUMN IF NOT EXISTS price_yearly INTEGER NOT NULL DEFAULT 0');
+
   // Existing organizations default to Basic.
   await pool.query("UPDATE organizations SET plan_id = (SELECT id FROM plans WHERE name = 'Basic') WHERE plan_id IS NULL");
 }

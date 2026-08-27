@@ -58,6 +58,16 @@ mine = (await plansOf(admin)).find((p) => p.id === planId);
 if (mine.name !== `Gold${rand}` || mine.price_monthly !== 8000 || mine.max_students !== 120) throw new Error('edit not applied: ' + JSON.stringify(mine));
 ok('admin edits a plan (rename, reprice, change cap)');
 
+// Per-period pricing: explicit annual price is kept; unset periods derive from monthly.
+const periodPlan = await call(admin, '/api/plans', 'POST', { name: `Periods${rand}`, priceMonthly: 1000, maxStudents: 60, sortOrder: 15, priceYearly: 10000 });
+const pp = (await plansOf(admin)).find((p) => p.id === periodPlan.data.id);
+if (!pp.pricing) throw new Error('plans should expose per-period pricing');
+if (pp.pricing.monthly !== 1000) throw new Error('monthly pricing wrong');
+if (pp.pricing.quarterly !== 3000) throw new Error('quarterly should derive as monthly × 3, got ' + pp.pricing.quarterly);
+if (pp.pricing.half_yearly !== 6000) throw new Error('half-yearly should derive as monthly × 6');
+if (pp.pricing.yearly !== 10000) throw new Error('explicit annual price should be kept (discount), got ' + pp.pricing.yearly);
+ok('per-period pricing: explicit annual kept as a discount, other periods derived from monthly');
+
 // An unlimited/custom plan stores a NULL cap.
 const custom = await call(admin, '/api/plans', 'POST', { name: `Custom${rand}`, priceMonthly: 0, unlimited: true, sortOrder: 20 });
 const customPlan = (await plansOf(admin)).find((p) => p.id === custom.data.id);
