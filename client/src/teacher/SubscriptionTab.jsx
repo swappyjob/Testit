@@ -59,6 +59,17 @@ export default function SubscriptionTab({ isRoot, embedded = false, onContact })
             </div>
             <p style={{ fontSize: 22, fontWeight: 700, margin: '6px 0 2px' }}>{fmtPrice(p)}</p>
             <p className="muted" style={{ margin: '0 0 10px' }}>{fmtCap(p)}</p>
+            {!custom && p.price_monthly > 0 && p.pricing && (
+              <div style={{ margin: '0 0 12px', borderTop: '1px solid var(--line)', paddingTop: 8 }}>
+                {[['Quarterly', 'quarterly'], ['Half-yearly', 'half_yearly'], ['Annual', 'yearly']].map(([label, key]) => (
+                  <div key={key} className="row" style={{ justifyContent: 'space-between', fontSize: 13, padding: '2px 0' }}>
+                    <span className="muted">{label}</span>
+                    <b>₹{Number(p.pricing[key]).toLocaleString('en-IN')}</b>
+                  </div>
+                ))}
+                <p className="muted" style={{ fontSize: 11, margin: '4px 0 0' }}>Choose a billing period when you renew.</p>
+              </div>
+            )}
             {custom ? (
               !isCurrent && <>
                 <p className="muted" style={{ fontSize: 13, margin: '0 0 10px' }}>Tailored to your size — get in touch to discuss terms and pricing.</p>
