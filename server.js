@@ -736,7 +736,12 @@ function extendExpiry(currentExpiry, months) {
   const base = cur && !isNaN(cur) && cur.getTime() > now.getTime() ? cur : now;
   const d = new Date(base.getTime());
   d.setMonth(d.getMonth() + months);
-  return d.toISOString().slice(0, 10);
+  // Format from local date parts (not toISOString, which shifts to UTC and can
+  // land a day earlier than the client's preview).
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
 }
 const PLAN_COLS = 'p.id, p.name, p.max_students, p.price_monthly, p.price_quarterly, p.price_half_yearly, p.price_yearly, p.sort_order';
 
@@ -903,29 +908,52 @@ async function verifyRenewalPayment(/* req, plan, period */) {
   return { ok: false, error: 'Payment verification is not configured yet.' };
 }
 
-// A root teacher renews (extends) their organization's subscription for a chosen
-// billing period. Works even while read-only/expired (that's the point).
+// A root teacher subscribes to a plan and/or renews for a chosen billing period.
+// - period: monthly | quarterly | half_yearly | yearly (required)
+// - planId (optional): switch to this plan; the new term then starts from today.
+//   Without planId it renews the current plan, extending from the current expiry.
+// Works even while read-only/expired (that's the point).
 app.post('/api/my-org/renew', requireRoot, h(async (req, res) => {
   const period = String(req.body.period || 'monthly');
   if (!isPeriod(period)) return res.status(400).json({ error: 'Choose a valid billing period.' });
   const org = await get(
-    `SELECT o.id, o.name, o.subscription_expires_at, p.name AS plan_name, p.price_monthly, p.price_quarterly, p.price_half_yearly, p.price_yearly
+    `SELECT o.id, o.name, o.plan_id, o.subscription_expires_at,
+            p.name AS plan_name, p.max_students, p.price_monthly, p.price_quarterly, p.price_half_yearly, p.price_yearly
        FROM organizations o LEFT JOIN plans p ON p.id = o.plan_id WHERE o.id = ?`,
     [req.user.org_id]
   );
   if (!org) return res.status(404).json({ error: 'Organization not found.' });
 
-  const pay = await verifyRenewalPayment(req, org, period);
+  const targetPlanId = req.body.planId ? Number(req.body.planId) : null;
+  const switching = targetPlanId && targetPlanId !== org.plan_id;
+  // Current plan's pricing (aliased so org id/name aren't clobbered above).
+  let planForPrice = { name: org.plan_name, price_monthly: org.price_monthly, price_quarterly: org.price_quarterly, price_half_yearly: org.price_half_yearly, price_yearly: org.price_yearly };
+  if (switching) {
+    const np = await get(`SELECT ${PLAN_COLS} FROM plans p WHERE p.id = ?`, [targetPlanId]);
+    if (!np) return res.status(400).json({ error: 'Invalid plan.' });
+    if (np.max_students == null) return res.status(403).json({ error: 'That’s a custom plan — please contact us to set it up for your organization.' });
+    const studentCount = (await get("SELECT COUNT(*) AS c FROM signup_tokens WHERE invite_role = 'student' AND org_id = ?", [org.id])).c;
+    if (studentCount > np.max_students)
+      return res.status(400).json({ error: `Your organization has ${studentCount} students, but the ${np.name} plan supports up to ${np.max_students}. Remove students or choose a larger plan.` });
+    planForPrice = np;
+  }
+
+  const pay = await verifyRenewalPayment(req, planForPrice, period);
   if (!pay.ok) return res.status(402).json({ error: pay.error }); // 402 Payment Required
 
-  const amount = periodPrice(org, period);
-  const newExpiry = extendExpiry(org.subscription_expires_at, BILLING_PERIODS[period]);
-  await run('UPDATE organizations SET subscription_expires_at = ? WHERE id = ?', [newExpiry, org.id]);
-  await logAudit(req, {
-    action: 'subscription.renew', entityType: 'organization', entityId: org.id, entityLabel: org.name,
-    details: `Renewed (${period}${pay.manual ? ', manual — no payment gateway yet' : ''}) → expires ${newExpiry}${amount ? ` · ₹${amount}` : ''}`,
+  const amount = periodPrice(planForPrice, period);
+  // Switching a plan starts a fresh term from today; renewing extends the current one.
+  const newExpiry = extendExpiry(switching ? '' : org.subscription_expires_at, BILLING_PERIODS[period]);
+  await tx(async (t) => {
+    if (switching) await t.run('UPDATE organizations SET plan_id = ? WHERE id = ?', [targetPlanId, org.id]);
+    await t.run('UPDATE organizations SET subscription_expires_at = ? WHERE id = ?', [newExpiry, org.id]);
   });
-  res.json({ ok: true, expiresAt: newExpiry, period, amount, manual: !!pay.manual });
+  const verb = switching ? 'Subscribed' : 'Renewed';
+  await logAudit(req, {
+    action: switching ? 'subscription.subscribe' : 'subscription.renew', entityType: 'organization', entityId: org.id, entityLabel: org.name,
+    details: `${verb} ${planForPrice.name} (${period}${pay.manual ? ', manual — no payment gateway yet' : ''}) → expires ${newExpiry}${amount ? ` · ₹${amount}` : ''}`,
+  });
+  res.json({ ok: true, expiresAt: newExpiry, period, amount, manual: !!pay.manual, planName: planForPrice.name, switched: !!switching });
 }));
 
 // List organizations with their teachers (signed up + pending) and counts.

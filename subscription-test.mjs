@@ -115,6 +115,13 @@ const daysOut = Math.round((new Date(yr.expiresAt).getTime() - Date.now()) / 864
 if (daysOut < 300) throw new Error('annual renewal should extend ~1 year, got ' + daysOut + ' days');
 ok('billing periods extend the subscription by the right length (annual ≈ 1 year)');
 
+// Subscribing to a plan (renew with planId) switches the tier AND sets the term.
+const basic = orgPlan.plans.find((p) => p.name === 'Basic');
+const sub = await call(root, '/api/my-org/renew', 'POST', { period: 'quarterly', planId: basic.id });
+if (sub.status !== 200 || sub.data.planName !== 'Basic' || !sub.data.switched) throw new Error('subscribe-with-plan should switch the tier and report it: ' + JSON.stringify(sub.data));
+if ((await call(root, '/api/my-org/plan')).data.plan.name !== 'Basic') throw new Error('the org should now be on the Basic plan');
+ok('subscribing with a plan switches the tier and sets the chosen billing period in one step');
+
 // A non-root teacher cannot renew.
 const nonRoot = makeJar();
 const inv = (await call(root, '/api/teachers', 'POST', { name: 'NR', email: `nr${rand}@x.com`, phone: '9000000001', isRoot: false })).data;

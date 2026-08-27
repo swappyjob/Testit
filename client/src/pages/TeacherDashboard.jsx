@@ -7,6 +7,7 @@ import TestBuilder from '../teacher/TestBuilder.jsx';
 import StudentsTab from '../teacher/StudentsTab.jsx';
 import TeachersTab from '../teacher/TeachersTab.jsx';
 import SubscriptionTab from '../teacher/SubscriptionTab.jsx';
+import SubscribeModal, { periodLabel, fmtDate } from '../teacher/SubscribeModal.jsx';
 import QuestionBank from '../teacher/QuestionBank.jsx';
 import AuditLogs from '../teacher/AuditLogs.jsx';
 import SupportTickets from '../teacher/SupportTickets.jsx';
@@ -135,82 +136,16 @@ export default function TeacherDashboard() {
       </div>
       {showProfile && <ProfileModal me={me} initialPane={profilePane} onClose={() => setShowProfile(false)} onContactSupport={() => { setShowProfile(false); setTab('support'); }} />}
       {showRenew && (
-        <RenewModal
+        <SubscribeModal
           onClose={() => setShowRenew(false)}
-          onRenewed={(newExpiry) => {
-            setRenewedUntil(newExpiry);
+          onDone={(r) => {
+            setRenewedUntil(r.expiresAt);
             setShowRenew(false);
-            setRenewMsg(`Subscription renewed — now active until ${new Date(newExpiry).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}.`);
+            setRenewMsg(`Subscription renewed (${periodLabel(r.period)}) — now active until ${fmtDate(r.expiresAt)}.`);
           }}
         />
       )}
     </>
-  );
-}
-
-const RENEW_PERIODS = [
-  { key: 'monthly', label: 'Monthly', months: 1 },
-  { key: 'quarterly', label: 'Quarterly', months: 3 },
-  { key: 'half_yearly', label: 'Half-yearly', months: 6 },
-  { key: 'yearly', label: 'Annual', months: 12 },
-];
-const inr = (n) => (n > 0 ? '₹' + Number(n).toLocaleString('en-IN') : 'Free');
-function previewExpiry(currentUntil, months) {
-  const now = new Date();
-  const cur = currentUntil ? new Date(currentUntil) : null;
-  const base = cur && !isNaN(cur) && cur.getTime() > now.getTime() ? cur : now;
-  const d = new Date(base.getTime());
-  d.setMonth(d.getMonth() + months);
-  return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
-}
-
-// Root teacher renews their organization's subscription for a chosen billing
-// period. The actual payment step slots in here once a gateway is integrated.
-function RenewModal({ onClose, onRenewed }) {
-  const [data, setData] = useState(null); // { plan, subscriptionUntil, ... }
-  const [period, setPeriod] = useState('yearly');
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState(null);
-
-  useEffect(() => { api('/api/my-org/plan').then(setData).catch((e) => setMsg({ ok: false, text: e.message })); }, []);
-
-  async function renew() {
-    setBusy(true); setMsg(null);
-    try { const r = await api('/api/my-org/renew', 'POST', { period }); onRenewed(r.expiresAt, r); }
-    catch (e) { setMsg({ ok: false, text: e.message }); setBusy(false); }
-  }
-
-  if (!data) return <Modal title="Renew subscription" onClose={onClose}><p className="muted">Loading…</p></Modal>;
-  const plan = data.plan;
-  const pricing = (plan && plan.pricing) || {};
-  const sel = RENEW_PERIODS.find((p) => p.key === period);
-
-  return (
-    <Modal title="Renew subscription" onClose={onClose}>
-      {plan
-        ? <p className="muted" style={{ marginTop: 0 }}>Your organization is on the <b>{plan.name}</b> plan. Choose a billing period to renew.</p>
-        : <p className="muted" style={{ marginTop: 0 }}>No plan is assigned to your organization yet.</p>}
-      <div style={{ display: 'grid', gap: 8 }}>
-        {RENEW_PERIODS.map((p) => (
-          <label key={p.key} className="choice" style={{ display: 'flex', alignItems: 'center', gap: 10, ...(period === p.key ? { border: '2px solid var(--brand)' } : {}) }}>
-            <input type="radio" name="renew-period" checked={period === p.key} onChange={() => setPeriod(p.key)} style={{ width: 'auto' }} />
-            <span style={{ flex: 1 }}>{p.label} <span className="muted" style={{ fontSize: 13 }}>· {p.months} month{p.months === 1 ? '' : 's'}</span></span>
-            <b>{plan ? inr(pricing[p.key]) : '—'}</b>
-          </label>
-        ))}
-      </div>
-      <p className="muted" style={{ fontSize: 13, marginTop: 12 }}>
-        Renews from {data.subscriptionUntil ? 'your current expiry' : 'today'} → new expiry <b>{previewExpiry(data.subscriptionUntil, sel.months)}</b>.
-      </p>
-      <div className="msg" style={{ background: '#eef2ff', color: 'var(--brand-dark)', fontSize: 13 }}>
-        💳 Online payment is coming soon. For now this records the renewal and extends your access immediately.
-      </div>
-      {msg && <Msg text={msg.text} kind={msg.ok ? 'ok' : 'error'} />}
-      <div className="row" style={{ marginTop: 16, gap: 10 }}>
-        <button className="btn" onClick={renew} disabled={busy}>{busy ? 'Renewing…' : `Renew — ${plan ? inr(pricing[period]) : ''}`}</button>
-        <button className="btn ghost" onClick={onClose}>Cancel</button>
-      </div>
-    </Modal>
   );
 }
 

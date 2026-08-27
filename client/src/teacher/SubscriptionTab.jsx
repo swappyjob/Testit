@@ -1,30 +1,24 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api.js';
 import { Msg } from '../components.jsx';
-import { useConfirm } from '../confirm.jsx';
 import { fmtPrice, fmtCap } from '../pages/AdminDashboard.jsx';
+import SubscribeModal, { periodLabel, fmtDate } from './SubscribeModal.jsx';
 
-// Root teachers can view their organization's plan and switch to another.
+// Root teachers can view their organization's plan and subscribe/renew.
 // Non-root teachers see the plans but can't change them.
 // `embedded` renders without the big page card (e.g. inside the Profile dialog).
 export default function SubscriptionTab({ isRoot, embedded = false, onContact }) {
-  const confirm = useConfirm();
   const [data, setData] = useState(null); // { plan, studentCount, plans }
   const [msg, setMsg] = useState(null);
-  const [busy, setBusy] = useState(false);
+  const [subscribeTo, setSubscribeTo] = useState(null); // plan being subscribed to
 
   const load = () => api('/api/my-org/plan').then(setData).catch((e) => setMsg({ ok: false, text: e.message }));
   useEffect(() => { load(); }, []);
 
-  async function subscribe(p) {
-    if (!(await confirm({ title: 'Switch plan?', body: `Switch your organization to the ${p.name} plan (${fmtPrice(p)})?`, confirmLabel: 'Switch plan' }))) return;
-    setBusy(true); setMsg(null);
-    try {
-      await api('/api/my-org/plan', 'POST', { planId: p.id });
-      setMsg({ ok: true, text: `Your organization is now on the ${p.name} plan.` });
-      await load();
-    } catch (e) { setMsg({ ok: false, text: e.message }); }
-    finally { setBusy(false); }
+  function onSubscribed(r) {
+    setSubscribeTo(null);
+    setMsg({ ok: true, text: `Your organization is now on the ${r.planName} plan (${periodLabel(r.period)}) — active until ${fmtDate(r.expiresAt)}.` });
+    load();
   }
 
   if (!data) return <p className="muted">Loading…</p>;
@@ -67,7 +61,7 @@ export default function SubscriptionTab({ isRoot, embedded = false, onContact })
                     <b>₹{Number(p.pricing[key]).toLocaleString('en-IN')}</b>
                   </div>
                 ))}
-                <p className="muted" style={{ fontSize: 11, margin: '4px 0 0' }}>Choose a billing period when you renew.</p>
+                <p className="muted" style={{ fontSize: 11, margin: '4px 0 0' }}>Pick a billing period when you subscribe.</p>
               </div>
             )}
             {custom ? (
@@ -75,9 +69,11 @@ export default function SubscriptionTab({ isRoot, embedded = false, onContact })
                 <p className="muted" style={{ fontSize: 13, margin: '0 0 10px' }}>Tailored to your size — get in touch to discuss terms and pricing.</p>
                 <button className="btn secondary small" onClick={() => (onContact ? onContact() : null)}>Contact us</button>
               </>
+            ) : isCurrent ? (
+              isRoot && <button className="btn secondary small" onClick={() => setSubscribeTo('renew')}>Renew</button>
             ) : (
-              isRoot && !isCurrent && (
-                <button className="btn small" disabled={busy || tooSmall} onClick={() => subscribe(p)}>
+              isRoot && (
+                <button className="btn small" disabled={tooSmall} onClick={() => setSubscribeTo(p)}>
                   {tooSmall ? `Too small for ${data.studentCount} students` : 'Subscribe'}
                 </button>
               )
@@ -88,13 +84,22 @@ export default function SubscriptionTab({ isRoot, embedded = false, onContact })
     </div>
   );
 
+  const modalEl = subscribeTo && (
+    <SubscribeModal
+      targetPlan={subscribeTo === 'renew' ? null : subscribeTo}
+      onClose={() => setSubscribeTo(null)}
+      onDone={onSubscribed}
+    />
+  );
+
   if (embedded) {
-    return <>{summary}<div style={{ marginTop: 12 }}>{plans}</div></>;
+    return <>{summary}<div style={{ marginTop: 12 }}>{plans}</div>{modalEl}</>;
   }
   return (
     <>
       <div className="card"><h1 style={{ marginTop: 0 }}>Subscription</h1>{summary}</div>
       {plans}
+      {modalEl}
     </>
   );
 }
