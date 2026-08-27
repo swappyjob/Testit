@@ -711,8 +711,61 @@ app.post('/api/orgs', requireAdmin, h(async (req, res) => {
 
 // List the available pricing plans.
 app.get('/api/plans', requireAdmin, h(async (req, res) => {
-  const plans = await all('SELECT id, name, max_students, price_monthly FROM plans ORDER BY sort_order');
+  const plans = await all(
+    `SELECT p.id, p.name, p.max_students, p.price_monthly, p.sort_order,
+            (SELECT COUNT(*) FROM organizations o WHERE o.plan_id = p.id) AS org_count
+       FROM plans p ORDER BY p.sort_order, p.id`
+  );
   res.json({ plans });
+}));
+
+// Validate + normalize a plan payload from the admin plan editor.
+function readPlanBody(body) {
+  const name = String(body.name || '').trim();
+  const unlimited = body.unlimited === true;
+  const maxStudents = unlimited ? null : Math.round(Number(body.maxStudents));
+  const price = Math.round(Number(body.priceMonthly));
+  const sortOrder = Number.isFinite(Number(body.sortOrder)) ? Math.round(Number(body.sortOrder)) : 0;
+  if (!name) return { error: 'Plan name is required.' };
+  if (!unlimited && (!Number.isFinite(maxStudents) || maxStudents < 1)) return { error: 'Student cap must be a positive number (or mark the plan Unlimited).' };
+  if (!Number.isFinite(price) || price < 0) return { error: 'Price must be 0 or more (in rupees per month).' };
+  return { name, maxStudents, price, sortOrder };
+}
+
+// Admin creates a pricing plan.
+app.post('/api/plans', requireAdmin, h(async (req, res) => {
+  const p = readPlanBody(req.body);
+  if (p.error) return res.status(400).json({ error: p.error });
+  if (await get('SELECT id FROM plans WHERE LOWER(name) = LOWER(?)', [p.name]))
+    return res.status(409).json({ error: 'A plan with that name already exists.' });
+  const id = (await run(
+    'INSERT INTO plans (name, max_students, price_monthly, sort_order) VALUES (?, ?, ?, ?) RETURNING id',
+    [p.name, p.maxStudents, p.price, p.sortOrder]
+  )).rows[0].id;
+  res.json({ id });
+}));
+
+// Admin edits a pricing plan.
+app.put('/api/plans/:id', requireAdmin, h(async (req, res) => {
+  const id = Number(req.params.id);
+  if (!(await get('SELECT id FROM plans WHERE id = ?', [id]))) return res.status(404).json({ error: 'Plan not found.' });
+  const p = readPlanBody(req.body);
+  if (p.error) return res.status(400).json({ error: p.error });
+  if (await get('SELECT id FROM plans WHERE LOWER(name) = LOWER(?) AND id <> ?', [p.name, id]))
+    return res.status(409).json({ error: 'A plan with that name already exists.' });
+  await run('UPDATE plans SET name = ?, max_students = ?, price_monthly = ?, sort_order = ? WHERE id = ?',
+    [p.name, p.maxStudents, p.price, p.sortOrder, id]);
+  res.json({ ok: true });
+}));
+
+// Admin deletes a plan — blocked while any organization is still on it.
+app.delete('/api/plans/:id', requireAdmin, h(async (req, res) => {
+  const id = Number(req.params.id);
+  if (!(await get('SELECT id FROM plans WHERE id = ?', [id]))) return res.status(404).json({ error: 'Plan not found.' });
+  const inUse = (await get('SELECT COUNT(*) AS c FROM organizations WHERE plan_id = ?', [id])).c;
+  if (inUse > 0) return res.status(409).json({ error: `${inUse} organization(s) are on this plan. Reassign them to another plan first.` });
+  await run('DELETE FROM plans WHERE id = ?', [id]);
+  res.json({ ok: true });
 }));
 
 // Assign a plan to an organization.

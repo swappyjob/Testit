@@ -20,7 +20,8 @@ export default function AdminDashboard() {
   const timer = useRef(null);
 
   const load = (q = query) => api('/api/orgs' + (q ? '?q=' + encodeURIComponent(q) : '')).then((d) => setOrgs(d.orgs));
-  useEffect(() => { if (me) { load(''); api('/api/plans').then((d) => setPlans(d.plans)); } }, [me]);
+  const loadPlans = () => api('/api/plans').then((d) => setPlans(d.plans));
+  useEffect(() => { if (me) { load(''); loadPlans(); } }, [me]);
 
   function onSearch(v) { setQuery(v); clearTimeout(timer.current); timer.current = setTimeout(() => load(v), 250); }
   async function createOrg() {
@@ -51,24 +52,7 @@ export default function AdminDashboard() {
 
         <SupportAgentsCard />
 
-        {plans.length > 0 && (
-          <div className="card">
-            <h2>Pricing plans</h2>
-            <p className="muted">Priced by number of students. Assign a plan to each organization below.</p>
-            <table>
-              <thead><tr><th>Plan</th><th>Students</th><th>Price</th></tr></thead>
-              <tbody>
-                {plans.map((p) => (
-                  <tr key={p.id}>
-                    <td><b>{p.name}</b></td>
-                    <td>{p.max_students == null ? 'Unlimited' : `up to ${p.max_students}`}</td>
-                    <td>{fmtPrice(p)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+        <PlansCard plans={plans} onChanged={() => { loadPlans(); load(query); }} />
 
         {orgs === null ? (
           <div className="card"><p className="muted">Loading…</p></div>
@@ -159,6 +143,100 @@ function SupportAgentsCard() {
       </div>
       <div style={{ marginTop: 14 }}><button className="btn" onClick={add}>Create support agent</button></div>
     </div>
+  );
+}
+
+// Manage the pricing-plan catalog: create, edit, delete plans.
+function PlansCard({ plans, onChanged }) {
+  const confirm = useConfirm();
+  const [editing, setEditing] = useState(null); // plan object, or { isNew: true }
+  const [msg, setMsg] = useState(null);
+
+  async function del(p) {
+    if (!(await confirm({ title: `Delete the ${p.name} plan?`, body: 'This removes the plan from the catalog. Organizations must be reassigned first.', confirmLabel: 'Delete', danger: true }))) return;
+    try { await api('/api/plans/' + p.id, 'DELETE'); setMsg(null); onChanged(); }
+    catch (e) { setMsg({ ok: false, text: e.message }); }
+  }
+
+  return (
+    <div className="card">
+      <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+        <h2 style={{ margin: 0 }}>Pricing plans</h2>
+        <button className="btn small" onClick={() => setEditing({ isNew: true })}>➕ Add plan</button>
+      </div>
+      <p className="muted">Priced by number of students. These are the plans an admin can assign to each organization below.</p>
+      {msg && <Msg text={msg.text} kind="error" />}
+      {plans.length === 0 ? (
+        <p className="muted">No plans yet. Click <b>Add plan</b> to create one.</p>
+      ) : (
+        <table>
+          <thead><tr><th>Plan</th><th>Students</th><th>Price</th><th>In use</th><th></th></tr></thead>
+          <tbody>
+            {plans.map((p) => (
+              <tr key={p.id}>
+                <td><b>{p.name}</b></td>
+                <td>{p.max_students == null ? 'Unlimited' : `up to ${p.max_students}`}</td>
+                <td>{fmtPrice(p)}</td>
+                <td>{p.org_count > 0 ? `${p.org_count} org${p.org_count === 1 ? '' : 's'}` : '—'}</td>
+                <td style={{ textAlign: 'right' }}>
+                  <button className="btn secondary small" onClick={() => setEditing(p)}>Edit</button>{' '}
+                  <button className="btn danger small" disabled={p.org_count > 0} title={p.org_count > 0 ? 'Reassign its organizations first' : undefined} onClick={() => del(p)}>Delete</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {editing && <PlanEditor plan={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); onChanged(); }} />}
+    </div>
+  );
+}
+
+// Create / edit a single plan.
+function PlanEditor({ plan, onClose, onSaved }) {
+  const isNew = !!plan.isNew;
+  const [name, setName] = useState(plan.name || '');
+  const [unlimited, setUnlimited] = useState(plan.max_students == null && !isNew);
+  const [maxStudents, setMaxStudents] = useState(plan.max_students != null ? String(plan.max_students) : '');
+  const [priceMonthly, setPriceMonthly] = useState(plan.price_monthly != null ? String(plan.price_monthly) : '0');
+  const [sortOrder, setSortOrder] = useState(plan.sort_order != null ? String(plan.sort_order) : '');
+  const [msg, setMsg] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  async function save() {
+    setBusy(true); setMsg(null);
+    const body = { name, unlimited, maxStudents: Number(maxStudents), priceMonthly: Number(priceMonthly), sortOrder: Number(sortOrder) || 0 };
+    try {
+      if (isNew) await api('/api/plans', 'POST', body);
+      else await api('/api/plans/' + plan.id, 'PUT', body);
+      onSaved();
+    } catch (e) { setMsg({ ok: false, text: e.message }); setBusy(false); }
+  }
+
+  return (
+    <Modal title={isNew ? 'Add plan' : `Edit ${plan.name}`} onClose={onClose}>
+      {msg && <Msg text={msg.text} kind="error" />}
+      <label>Plan name</label>
+      <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Standard" />
+      <label>Price (₹ per month)</label>
+      <input type="number" min="0" step="1" value={priceMonthly} onChange={(e) => setPriceMonthly(e.target.value)} placeholder="0 = Free" style={{ width: 200 }} />
+      <label className="choice" style={{ marginTop: 12 }}>
+        <input type="checkbox" checked={unlimited} onChange={(e) => setUnlimited(e.target.checked)} />
+        Unlimited students (custom / enterprise plan)
+      </label>
+      {!unlimited && (
+        <>
+          <label>Student cap</label>
+          <input type="number" min="1" step="1" value={maxStudents} onChange={(e) => setMaxStudents(e.target.value)} placeholder="e.g. 100" style={{ width: 200 }} />
+        </>
+      )}
+      <label>Display order (lower shows first)</label>
+      <input type="number" step="1" value={sortOrder} onChange={(e) => setSortOrder(e.target.value)} placeholder="e.g. 2" style={{ width: 200 }} />
+      <div className="row" style={{ marginTop: 18, gap: 10 }}>
+        <button className="btn" onClick={save} disabled={busy}>{busy ? 'Saving…' : isNew ? 'Create plan' : 'Save changes'}</button>
+        <button className="btn ghost" onClick={onClose}>Cancel</button>
+      </div>
+    </Modal>
   );
 }
 
