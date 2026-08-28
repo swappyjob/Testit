@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
 import { api } from '../api.js';
 import { useRequireRole } from '../auth.js';
-import { DashboardBar, Modal, Msg, PasswordInput } from '../components.jsx';
+import { DashboardBar, Modal, Msg, PasswordInput, copyText } from '../components.jsx';
 import { useConfirm } from '../confirm.jsx';
 
 export const fmtPrice = (p) =>
@@ -414,15 +414,18 @@ function OrgDetail({ id, plans, onEditTeacher, onBack }) {
     catch (e) { setMsg({ ok: false, text: e.message }); }
   }
   async function copy(text, btn) {
-    await navigator.clipboard.writeText(text);
-    const prev = btn.textContent; btn.textContent = 'Copied!';
-    setTimeout(() => { btn.textContent = prev; }, 1500);
+    const ok = await copyText(text);
+    const prev = btn.textContent; btn.textContent = ok ? 'Copied!' : 'Press Ctrl/⌘+C';
+    setTimeout(() => { btn.textContent = prev; }, ok ? 1500 : 2500);
+    return ok;
   }
   async function copyReset(t, btn) {
     try {
       const { resetPath } = await api('/api/admin/teachers/' + t.id + '/reset-link', 'POST');
-      await copy(window.location.origin + resetPath, btn);
-      setMsg({ ok: true, text: `Reset link for ${t.name} copied — send it to them. It expires in 1 hour.` });
+      const link = window.location.origin + resetPath;
+      const ok = await copy(link, btn);
+      // Always show the link — if the clipboard was blocked, the admin can still copy it by hand.
+      setMsg({ ok: true, text: `${ok ? 'Reset link copied' : 'Copy the reset link below'} for ${t.name} (expires in 1 hour): ${link}` });
     } catch (e) { setMsg({ ok: false, text: e.message }); }
   }
 

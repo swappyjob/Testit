@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api.js';
-import { Msg, Modal } from '../components.jsx';
+import { Msg, Modal, copyText } from '../components.jsx';
 import { useConfirm, useAlert } from '../confirm.jsx';
 
 export default function TeachersTab({ readOnly }) {
@@ -29,13 +29,18 @@ export default function TeachersTab({ readOnly }) {
     catch (e) { setMsg({ ok: false, text: e.message }); }
   }
   async function copy(text, btn) {
-    await navigator.clipboard.writeText(text);
-    const prev = btn.textContent; btn.textContent = 'Copied!';
-    setTimeout(() => { btn.textContent = prev; }, 1500);
+    const ok = await copyText(text);
+    const prev = btn.textContent; btn.textContent = ok ? 'Copied!' : 'Press Ctrl/⌘+C';
+    setTimeout(() => { btn.textContent = prev; }, ok ? 1500 : 2500);
+    return ok;
   }
   async function copyReset(t, btn) {
-    try { const { resetPath } = await api('/api/teachers/' + t.id + '/reset-link', 'POST'); await copy(window.location.origin + resetPath, btn); }
-    catch (e) { alert(e.message); }
+    let link;
+    try { const { resetPath } = await api('/api/teachers/' + t.id + '/reset-link', 'POST'); link = window.location.origin + resetPath; }
+    catch (e) { setMsg({ ok: false, text: e.message }); return; }
+    const ok = await copy(link, btn);
+    // Always surface the link so a blocked clipboard never hides it.
+    setMsg({ ok: true, text: `${ok ? 'Reset link copied' : 'Copy the reset link below'} for ${t.name} (expires in 1 hour): ${link}` });
   }
 
   if (!data) return <div className="card"><p className="muted">Loading…</p></div>;

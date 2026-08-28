@@ -92,13 +92,42 @@ export function Modal({ title, onClose, children, wide = false }) {
   );
 }
 
-// Copy text to the clipboard, flashing a label on a button.
+// Copy text to the clipboard with a legacy fallback for browsers/contexts that
+// block navigator.clipboard (no page focus, insecure origin, denied permission).
+// Never throws — returns true only if the copy definitely succeeded, so callers
+// can fall back to showing the text for manual copying.
+export async function copyText(text) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch { /* fall through to the legacy path below */ }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.top = '-1000px';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch { return false; }
+}
+
+// Copy text to the clipboard, flashing a label on a button. Returns whether the
+// copy succeeded so callers can surface the text when the clipboard is blocked.
 export function useCopyButton() {
   return async (text, btn) => {
-    await navigator.clipboard.writeText(text);
+    const ok = await copyText(text);
     const prev = btn.textContent;
-    btn.textContent = 'Copied!';
-    setTimeout(() => { btn.textContent = prev; }, 1500);
+    btn.textContent = ok ? 'Copied!' : 'Press Ctrl/⌘+C';
+    setTimeout(() => { btn.textContent = prev; }, ok ? 1500 : 2500);
+    return ok;
   };
 }
 

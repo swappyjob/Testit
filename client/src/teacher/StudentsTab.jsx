@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { api } from '../api.js';
-import { Msg, Modal } from '../components.jsx';
+import { Msg, Modal, copyText } from '../components.jsx';
 import { useConfirm } from '../confirm.jsx';
 
 export default function StudentsTab({ readOnly }) {
@@ -211,8 +211,12 @@ function StudentDetail({ student: s, onBack, onChanged, readOnly }) {
     catch (e) { setMsg({ text: e.message, ok: false }); } finally { setBusy(false); }
   }
   async function copyResetLink(btn) {
-    try { const { resetPath } = await api('/api/students/' + s.studentId + '/reset-link', 'POST'); await copyToClipboard(window.location.origin + resetPath, btn); }
-    catch (e) { setMsg({ text: e.message, ok: false }); }
+    let link;
+    try { const { resetPath } = await api('/api/students/' + s.studentId + '/reset-link', 'POST'); link = window.location.origin + resetPath; }
+    catch (e) { setMsg({ text: e.message, ok: false }); return; }
+    const ok = await copyToClipboard(link, btn);
+    // Always surface the link so a blocked clipboard never hides it.
+    setMsg({ ok: true, text: `${ok ? 'Reset link copied' : 'Copy the reset link below'} for ${s.name} (expires in 1 hour): ${link}` });
   }
 
   return (
@@ -253,10 +257,11 @@ function StudentDetail({ student: s, onBack, onChanged, readOnly }) {
 }
 
 async function copyToClipboard(text, btn) {
-  await navigator.clipboard.writeText(text);
+  const ok = await copyText(text);
   const prev = btn.textContent;
-  btn.textContent = 'Copied!';
-  setTimeout(() => { btn.textContent = prev; }, 1500);
+  btn.textContent = ok ? 'Copied!' : 'Press Ctrl/⌘+C';
+  setTimeout(() => { btn.textContent = prev; }, ok ? 1500 : 2500);
+  return ok;
 }
 
 function EditStudentModal({ student, onClose, onSaved }) {
