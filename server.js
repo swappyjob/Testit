@@ -858,7 +858,7 @@ app.post('/api/admins', requireAdmin, h(async (req, res) => {
 // the current subscription expiry (for the renewal flow).
 app.get('/api/my-org/plan', requireAuth('teacher'), h(async (req, res) => {
   const org = await get(
-    `SELECT o.subscription_expires_at, ${PLAN_COLS}
+    `SELECT o.subscription_expires_at, o.subscription_period, o.subscription_term_price, o.credit_balance, ${PLAN_COLS}
        FROM organizations o LEFT JOIN plans p ON p.id = o.plan_id WHERE o.id = ?`,
     [req.user.org_id]
   );
@@ -870,6 +870,9 @@ app.get('/api/my-org/plan', requireAuth('teacher'), h(async (req, res) => {
   res.json({
     plan, studentCount, plans,
     subscriptionUntil: org ? (org.subscription_expires_at || '') : '',
+    subscriptionPeriod: org ? (org.subscription_period || '') : '',
+    subscriptionTermPrice: org ? (org.subscription_term_price || 0) : 0,
+    creditBalance: org ? (org.credit_balance || 0) : 0,
     subscriptionExpired: isExpired(org && org.subscription_expires_at),
   });
 }));
@@ -915,11 +918,35 @@ function daysUntil(dateStr) {
   if (!Number.isFinite(t)) return 0;
   return Math.max(0, Math.ceil((t - Date.now()) / 86400000));
 }
-// Prorated top-up to move from the current plan to a pricier one for the days
-// left in the cycle (monthly basis). 0 when the new plan isn't more expensive.
-function proratedTopUp(oldMonthly, newMonthly, daysRemaining) {
-  const diff = (newMonthly || 0) - (oldMonthly || 0);
-  return diff > 0 ? Math.round((diff * daysRemaining) / 30) : 0;
+// Nominal length of a billing period in days (30-day months).
+function periodDays(period) { return (BILLING_PERIODS[period] || 1) * 30; }
+
+// Period-aware proration for a mid-cycle plan change. Credits the unused value
+// of the CURRENT term (at the price actually paid, including any discount) and
+// charges the same fraction of the NEW plan's price for the same period — so
+// the renewal date is preserved and the customer neither loses nor gains money.
+//   org needs: subscription_expires_at, subscription_period, subscription_term_price,
+//              and the current plan price columns (cur_monthly, cur_q, cur_h, cur_y).
+function computeProration(org, newPlan) {
+  const period = org.subscription_period && isPeriod(org.subscription_period) ? org.subscription_period : 'monthly';
+  const pDays = periodDays(period);
+  const daysRemaining = Math.min(pDays, daysUntil(org.subscription_expires_at));
+  const fraction = pDays > 0 ? daysRemaining / pDays : 0;
+  const curPlanForPrice = { price_monthly: org.cur_monthly, price_quarterly: org.cur_q, price_half_yearly: org.cur_h, price_yearly: org.cur_y };
+  const oldTermPrice = org.subscription_term_price > 0 ? org.subscription_term_price : (periodPrice(curPlanForPrice, period) || 0);
+  const newTermPrice = periodPrice(newPlan, period) || 0;
+  const credit = Math.round(oldTermPrice * fraction); // unused value of the current term
+  const charge = Math.round(newTermPrice * fraction);  // new plan for the remaining term
+  return { period, daysRemaining, fraction, oldTermPrice, newTermPrice, credit, charge };
+}
+
+// Append a billing-ledger row and return the resulting balance.
+async function recordTxn(t, orgId, { kind, planName, period, charged, credit, balanceAfter, expiresAt, note, actorName }) {
+  await t.run(
+    `INSERT INTO subscription_transactions (org_id, kind, plan_name, period, charged, credit, balance_after, expires_at, note, actor_name)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [orgId, kind, planName || '', period || '', charged || 0, credit || 0, balanceAfter || 0, expiresAt || '', note || '', actorName || '']
+  );
 }
 
 // A root teacher changes plan and/or renews their subscription. Three modes:
@@ -931,7 +958,7 @@ function proratedTopUp(oldMonthly, newMonthly, daysRemaining) {
 // `period` (monthly|quarterly|half_yearly|yearly) is required for subscribe/renew.
 app.post('/api/my-org/renew', requireRoot, h(async (req, res) => {
   const org = await get(
-    `SELECT o.id, o.name, o.plan_id, o.subscription_expires_at,
+    `SELECT o.id, o.name, o.plan_id, o.subscription_expires_at, o.subscription_period, o.subscription_term_price, o.credit_balance,
             p.name AS plan_name, p.max_students AS cur_cap, p.price_monthly AS cur_monthly,
             p.price_quarterly AS cur_q, p.price_half_yearly AS cur_h, p.price_yearly AS cur_y
        FROM organizations o LEFT JOIN plans p ON p.id = o.plan_id WHERE o.id = ?`,
@@ -939,10 +966,10 @@ app.post('/api/my-org/renew', requireRoot, h(async (req, res) => {
   );
   if (!org) return res.status(404).json({ error: 'Organization not found.' });
   const active = !!org.subscription_expires_at && !isExpired(org.subscription_expires_at);
+  const balance = org.credit_balance || 0;
   const targetPlanId = req.body.planId ? Number(req.body.planId) : null;
   const switching = targetPlanId && targetPlanId !== org.plan_id;
 
-  // Validate a plan switch (exists, not custom, within student cap).
   async function loadTargetPlan() {
     const np = await get(`SELECT ${PLAN_COLS} FROM plans p WHERE p.id = ?`, [targetPlanId]);
     if (!np) return { error: 'Invalid plan.', code: 400 };
@@ -953,24 +980,53 @@ app.post('/api/my-org/renew', requireRoot, h(async (req, res) => {
     return { np };
   }
 
-  // ---- Mode: mid-cycle plan change (keep the renewal anchor, prorate) --------
+  // ---- Mode: mid-cycle plan change — credit the unused term, then either keep the
+  //      renewal date (same billing period) or start a fresh term (different period) ----
   if (switching && active) {
     const t = await loadTargetPlan();
     if (t.error) return res.status(t.code).json({ error: t.error });
+    const pr = computeProration(org, t.np); // pr.credit = unused value of the CURRENT term; pr.period = current period
+    const chosenPeriod = req.body.period ? String(req.body.period) : pr.period;
+    if (!isPeriod(chosenPeriod)) return res.status(400).json({ error: 'Choose a valid billing period.' });
     const pay = await verifyRenewalPayment(req, t.np, 'change');
     if (!pay.ok) return res.status(402).json({ error: pay.error });
-    const daysRemaining = daysUntil(org.subscription_expires_at);
-    const prorated = proratedTopUp(org.cur_monthly, t.np.price_monthly, daysRemaining);
     const upgrade = (t.np.price_monthly || 0) > (org.cur_monthly || 0);
-    await run('UPDATE organizations SET plan_id = ? WHERE id = ?', [targetPlanId, org.id]); // expiry unchanged
+    const samePeriod = chosenPeriod === pr.period;
+    const credit = pr.credit; // unused value of the current prepaid term (always credited back)
+    // Same cadence → keep the renewal date, prorate the new plan for the remaining days.
+    // New cadence → start a fresh term today at the new plan's full period price.
+    const charge = samePeriod ? pr.charge : (periodPrice(t.np, chosenPeriod) || 0);
+    const newTermPrice = samePeriod ? pr.newTermPrice : charge;
+    const newExpiry = samePeriod ? org.subscription_expires_at : extendExpiry('', BILLING_PERIODS[chosenPeriod]);
+    const dueAfterTermCredit = Math.max(0, charge - credit); // new cost minus unused-term credit
+    const bankedCredit = Math.max(0, credit - charge);       // surplus credit → banked
+    const balanceUsed = Math.min(balance, dueAfterTermCredit);
+    const netPay = dueAfterTermCredit - balanceUsed;
+    const newBalance = balance - balanceUsed + bankedCredit;
+    await tx(async (tt) => {
+      await tt.run(
+        'UPDATE organizations SET plan_id = ?, subscription_period = ?, subscription_term_price = ?, subscription_expires_at = ?, credit_balance = ? WHERE id = ?',
+        [targetPlanId, chosenPeriod, newTermPrice, newExpiry, newBalance, org.id]
+      );
+      await recordTxn(tt, org.id, {
+        kind: upgrade ? 'upgrade' : 'downgrade', planName: t.np.name, period: chosenPeriod, charged: netPay,
+        credit: (credit + balanceUsed) - bankedCredit, balanceAfter: newBalance, expiresAt: newExpiry,
+        note: `${org.plan_name} → ${t.np.name}${samePeriod ? `, ${pr.daysRemaining} day(s) left` : `, new ${chosenPeriod} term`}${bankedCredit ? `; ₹${bankedCredit} credited to balance` : ''}`,
+        actorName: req.user.name,
+      });
+    });
     await logAudit(req, {
       action: 'subscription.change', entityType: 'organization', entityId: org.id, entityLabel: org.name,
-      details: `${upgrade ? 'Upgraded' : 'Changed'} ${org.plan_name} → ${t.np.name} mid-cycle; renewal date unchanged (${org.subscription_expires_at})${prorated ? `; prorated ₹${prorated} for ${daysRemaining} day(s)${pay.manual ? ' (manual — no gateway yet)' : ''}` : ''}`,
+      details: `${upgrade ? 'Upgraded' : 'Changed'} ${org.plan_name} → ${t.np.name} (${chosenPeriod})${samePeriod ? `; renewal date unchanged (${newExpiry})` : `; new term → ${newExpiry}`}; charge ₹${charge} − credit ₹${credit} = pay ₹${netPay}${bankedCredit ? `; banked ₹${bankedCredit}` : ''}${pay.manual ? ' (manual — no gateway yet)' : ''}`,
     });
-    return res.json({ ok: true, mode: 'change', upgrade, planName: t.np.name, expiresAt: org.subscription_expires_at, prorated, daysRemaining, manual: !!pay.manual, switched: true });
+    return res.json({
+      ok: true, mode: 'change', upgrade, planName: t.np.name, expiresAt: newExpiry,
+      period: chosenPeriod, periodChanged: !samePeriod, daysRemaining: pr.daysRemaining, credit, charge,
+      balanceUsed, bankedCredit, netPay, creditBalance: newBalance, manual: !!pay.manual, switched: true,
+    });
   }
 
-  // ---- Mode: fresh subscribe (expired) or renew (same plan) — needs a period -
+  // ---- Mode: fresh subscribe (expired) or renew (same plan) — needs a period ----
   const period = String(req.body.period || 'monthly');
   if (!isPeriod(period)) return res.status(400).json({ error: 'Choose a valid billing period.' });
   let planForPrice = { name: org.plan_name, price_monthly: org.cur_monthly, price_quarterly: org.cur_q, price_half_yearly: org.cur_h, price_yearly: org.cur_y };
@@ -981,17 +1037,36 @@ app.post('/api/my-org/renew', requireRoot, h(async (req, res) => {
   }
   const pay = await verifyRenewalPayment(req, planForPrice, period);
   if (!pay.ok) return res.status(402).json({ error: pay.error });
-  const amount = periodPrice(planForPrice, period);
+  const termPrice = periodPrice(planForPrice, period) || 0;
+  const balanceUsed = Math.min(balance, termPrice);
+  const netPay = termPrice - balanceUsed;
+  const newBalance = balance - balanceUsed;
   const newExpiry = extendExpiry(switching ? '' : org.subscription_expires_at, BILLING_PERIODS[period]);
   await tx(async (t) => {
     if (switching) await t.run('UPDATE organizations SET plan_id = ? WHERE id = ?', [targetPlanId, org.id]);
-    await t.run('UPDATE organizations SET subscription_expires_at = ? WHERE id = ?', [newExpiry, org.id]);
+    await t.run('UPDATE organizations SET subscription_expires_at = ?, subscription_period = ?, subscription_term_price = ?, credit_balance = ? WHERE id = ?',
+      [newExpiry, period, termPrice, newBalance, org.id]);
+    await recordTxn(t, org.id, {
+      kind: switching ? 'subscribe' : 'renew', planName: planForPrice.name, period, charged: netPay,
+      credit: balanceUsed, balanceAfter: newBalance, expiresAt: newExpiry, note: '', actorName: req.user.name,
+    });
   });
   await logAudit(req, {
     action: switching ? 'subscription.subscribe' : 'subscription.renew', entityType: 'organization', entityId: org.id, entityLabel: org.name,
-    details: `${switching ? 'Subscribed' : 'Renewed'} ${planForPrice.name} (${period}${pay.manual ? ', manual — no gateway yet' : ''}) → expires ${newExpiry}${amount ? ` · ₹${amount}` : ''}`,
+    details: `${switching ? 'Subscribed' : 'Renewed'} ${planForPrice.name} (${period}${pay.manual ? ', manual — no gateway yet' : ''}) → expires ${newExpiry}; charge ₹${termPrice}${balanceUsed ? ` − credit ₹${balanceUsed}` : ''} = pay ₹${netPay}`,
   });
-  res.json({ ok: true, mode: switching ? 'subscribe' : 'renew', planName: planForPrice.name, expiresAt: newExpiry, period, amount, manual: !!pay.manual, switched: !!switching });
+  res.json({ ok: true, mode: switching ? 'subscribe' : 'renew', planName: planForPrice.name, expiresAt: newExpiry, period, amount: termPrice, charged: netPay, balanceUsed, creditBalance: newBalance, manual: !!pay.manual, switched: !!switching });
+}));
+
+// A teacher views their organization's billing history (subscribe/renew/change).
+app.get('/api/my-org/transactions', requireAuth('teacher'), h(async (req, res) => {
+  const rows = await all(
+    `SELECT kind, plan_name, period, charged, credit, balance_after, expires_at, note, actor_name, created_at
+       FROM subscription_transactions WHERE org_id = ? ORDER BY id DESC LIMIT 50`,
+    [req.user.org_id]
+  );
+  const bal = await get('SELECT credit_balance FROM organizations WHERE id = ?', [req.user.org_id]);
+  res.json({ creditBalance: (bal && bal.credit_balance) || 0, transactions: rows });
 }));
 
 // List organizations with their teachers (signed up + pending) and counts.

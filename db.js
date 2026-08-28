@@ -337,6 +337,29 @@ async function init() {
   await pool.query('ALTER TABLE plans ADD COLUMN IF NOT EXISTS price_half_yearly INTEGER NOT NULL DEFAULT 0');
   await pool.query('ALTER TABLE plans ADD COLUMN IF NOT EXISTS price_yearly INTEGER NOT NULL DEFAULT 0');
 
+  // The organization's current billing term (needed for correct mid-cycle
+  // proration) and its running credit balance (rupees) from banked downgrades.
+  await pool.query("ALTER TABLE organizations ADD COLUMN IF NOT EXISTS subscription_period TEXT NOT NULL DEFAULT ''");
+  await pool.query('ALTER TABLE organizations ADD COLUMN IF NOT EXISTS subscription_term_price INTEGER NOT NULL DEFAULT 0');
+  await pool.query('ALTER TABLE organizations ADD COLUMN IF NOT EXISTS credit_balance INTEGER NOT NULL DEFAULT 0');
+
+  // Billing ledger: one row per subscribe / renew / upgrade / downgrade, so the
+  // org has a visible history and the credit balance has a source of truth.
+  await pool.query(`CREATE TABLE IF NOT EXISTS subscription_transactions (
+    id            SERIAL PRIMARY KEY,
+    org_id        INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    kind          TEXT NOT NULL,                    -- subscribe | renew | upgrade | downgrade
+    plan_name     TEXT NOT NULL DEFAULT '',
+    period        TEXT NOT NULL DEFAULT '',
+    charged       INTEGER NOT NULL DEFAULT 0,       -- amount payable now (rupees)
+    credit        INTEGER NOT NULL DEFAULT 0,       -- credit applied (+) or banked (−) this txn
+    balance_after INTEGER NOT NULL DEFAULT 0,       -- credit balance after this txn
+    expires_at    TEXT NOT NULL DEFAULT '',         -- resulting subscription expiry
+    note          TEXT NOT NULL DEFAULT '',
+    actor_name    TEXT NOT NULL DEFAULT '',
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+
   // Existing organizations default to Basic.
   await pool.query("UPDATE organizations SET plan_id = (SELECT id FROM plans WHERE name = 'Basic') WHERE plan_id IS NULL");
 }

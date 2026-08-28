@@ -121,16 +121,36 @@ const basic = orgPlan.plans.find((p) => p.name === 'Basic');
 const up = await call(root, '/api/my-org/renew', 'POST', { planId: basic.id }); // no period → change mode
 if (up.data.mode !== 'change' || up.data.planName !== 'Basic' || !up.data.upgrade) throw new Error('mid-cycle switch to a pricier plan should be an upgrade (change mode): ' + JSON.stringify(up.data));
 if (up.data.expiresAt !== before) throw new Error('an upgrade must NOT move the renewal date');
-if (!(up.data.prorated > 0)) throw new Error('an upgrade should compute a prorated top-up, got ' + up.data.prorated);
+if (!(up.data.charge > 0) || !(up.data.netPay > 0)) throw new Error('upgrading (from a free term) should charge for the new plan: ' + JSON.stringify(up.data));
 if ((await call(root, '/api/my-org/plan')).data.plan.name !== 'Basic') throw new Error('the org should now be on Basic');
-ok('mid-cycle upgrade: plan applies immediately, renewal date unchanged, prorated top-up computed');
+ok('mid-cycle upgrade: new plan immediately, date unchanged, period-aware charge computed');
 
-// A cheaper switch mid-cycle is also change-mode: no charge, date still unchanged.
+// Downgrading a paid term banks the unused value as credit (no refund, date unchanged).
 const free = orgPlan.plans.find((p) => p.name === 'Free');
 const down = await call(root, '/api/my-org/renew', 'POST', { planId: free.id });
-if (down.data.mode !== 'change' || down.data.upgrade || down.data.prorated !== 0) throw new Error('a cheaper switch should be change-mode with no charge: ' + JSON.stringify(down.data));
+if (down.data.mode !== 'change' || down.data.upgrade || down.data.netPay !== 0) throw new Error('a downgrade should be change-mode with no charge: ' + JSON.stringify(down.data));
+if (!(down.data.bankedCredit > 0) || !(down.data.creditBalance > 0)) throw new Error('downgrading a paid term should bank credit: ' + JSON.stringify(down.data));
 if (down.data.expiresAt !== before) throw new Error('a downgrade must not move the renewal date');
-ok('mid-cycle downgrade: change-mode, no charge, renewal date unchanged');
+ok('mid-cycle downgrade: no charge, unused value banked as credit, date unchanged');
+
+// The billing ledger records every transaction and exposes the credit balance.
+const hist = (await call(root, '/api/my-org/transactions')).data;
+if (!(hist.transactions.length >= 2)) throw new Error('billing history should record transactions');
+if (hist.creditBalance !== down.data.creditBalance) throw new Error('history credit balance should match the org balance');
+ok('billing history + credit balance are recorded and match');
+
+// Changing plan AND picking a different billing period starts a fresh term today
+// (date moves), credits the unused current term, and applies any banked balance.
+const standard = orgPlan.plans.find((p) => p.name === 'Standard');
+const balBefore = (await call(root, '/api/my-org/transactions')).data.creditBalance;
+const pc = await call(root, '/api/my-org/renew', 'POST', { planId: standard.id, period: 'quarterly' });
+if (pc.data.mode !== 'change' || !pc.data.periodChanged) throw new Error('picking a different period should start a fresh term (periodChanged): ' + JSON.stringify(pc.data));
+if (pc.data.period !== 'quarterly') throw new Error('the subscription period should update to the chosen one');
+const q90 = Math.round((new Date(pc.data.expiresAt).getTime() - Date.now()) / 86400000);
+if (q90 < 80 || q90 > 100) throw new Error('a fresh quarterly term should land ~90 days out, got ' + q90);
+if (!(pc.data.charge > 0)) throw new Error('a fresh term should charge the full new-period price');
+if (balBefore > 0 && !(pc.data.balanceUsed > 0)) throw new Error('an existing credit balance should apply to the fresh term');
+ok('plan change with a new period: fresh term, renewal date moves, credit balance applied');
 
 // A non-root teacher cannot renew.
 const nonRoot = makeJar();
