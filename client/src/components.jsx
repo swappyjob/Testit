@@ -22,7 +22,7 @@ function initialsOf(who) {
 }
 
 // A dashboard top bar with the user label, optional org name, and log out.
-export function DashboardBar({ who, orgName, children }) {
+export function DashboardBar({ who, orgName, children, hideLogout = false }) {
   return (
     <div className="topbar">
       <Link className="brand" to="/">📝 Test<span>Platform</span></Link>
@@ -31,7 +31,7 @@ export function DashboardBar({ who, orgName, children }) {
         {who && <span className="avatar" title={who}>{initialsOf(who)}</span>}
         {who && <span className="user">{who}</span>}
         {children}
-        <button className="btn ghost small" onClick={logout}>Log out</button>
+        {!hideLogout && <button className="btn ghost small" onClick={logout}>Log out</button>}
       </div>
     </div>
   );
@@ -91,6 +91,11 @@ export function Modal({ title, onClose, children, wide = false }) {
     </div>
   );
 }
+
+// Split a combined display name into first / last (for prefilling edit forms
+// whose source only carries a single `name`, e.g. pending invites).
+export const nameFirst = (n) => (String(n || '').trim().split(/\s+/).filter(Boolean)[0] || '');
+export const nameLast = (n) => String(n || '').trim().split(/\s+/).filter(Boolean).slice(1).join(' ');
 
 // Copy text to the clipboard with a legacy fallback for browsers/contexts that
 // block navigator.clipboard (no page focus, insecure origin, denied permission).

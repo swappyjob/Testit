@@ -25,18 +25,13 @@ const PERIOD_MONTHS = { monthly: 1, quarterly: 3, half_yearly: 6, yearly: 12 };
 
 // A user-facing message for a subscribe / renew / mid-cycle change result.
 export function renewResultMessage(r) {
+  const rupees = (n) => '₹' + Number(n || 0).toLocaleString('en-IN');
   if (r.mode === 'change') {
-    const dateBit = r.periodChanged
-      ? `new ${periodLabel(r.period).toLowerCase()} term — active until ${fmtDate(r.expiresAt)}`
-      : `renewal date unchanged (${fmtDate(r.expiresAt)})`;
-    const parts = [`${r.upgrade ? 'Upgraded to' : 'Changed to'} the ${r.planName} plan — ${dateBit}.`];
-    if (r.netPay > 0) parts.push(`You pay ${inr(r.netPay)}${r.credit ? ` (${inr(r.charge)}${r.periodChanged ? '' : ' for the remaining term'} − ${inr(r.credit)} credit for the unused term)` : ''}.`);
-    else if (r.bankedCredit > 0) parts.push(`${inr(r.bankedCredit)} credited to your balance (now ${inr(r.creditBalance)}).`);
-    else parts.push('Nothing to pay now.');
+    const parts = [`Upgraded to the ${r.planName} plan — renewal date unchanged (${fmtDate(r.expiresAt)}).`];
+    parts.push(r.charge > 0 ? `You pay ${rupees(r.charge)} — the prorated difference for the days left on your current term.` : 'Nothing more to pay now.');
     return parts.join(' ');
   }
-  const creditNote = r.balanceUsed ? ` · ${inr(r.balanceUsed)} credit applied` : '';
-  return `Your organization is now on the ${r.planName} plan (${periodLabel(r.period)}) — active until ${fmtDate(r.expiresAt)}${creditNote}.`;
+  return `Your organization is now on the ${r.planName} plan (${periodLabel(r.period)}) — active until ${fmtDate(r.expiresAt)}.`;
 }
 
 // One modal for all three flows. Pass `targetPlan` to move to that plan; omit it
@@ -67,79 +62,46 @@ export default function SubscribeModal({ targetPlan = null, onClose, onDone }) {
   async function confirm() {
     setBusy(true); setMsg(null);
     try {
-      const body = changeMode ? { planId: targetPlan.id, period } : { period, ...(isSwitch ? { planId: targetPlan.id } : {}) };
+      const body = changeMode ? { planId: targetPlan.id } : { period, ...(isSwitch ? { planId: targetPlan.id } : {}) };
       onDone(await api('/api/my-org/renew', 'POST', body));
     } catch (e) { setMsg({ ok: false, text: e.message }); setBusy(false); }
   }
 
-  // -------- Mid-cycle change (upgrade / downgrade): pick a period. Same period keeps
-  //          the renewal date & prorates; a different one starts a fresh term today. --------
+  // -------- Mid-term plan change: UPGRADE only, on the same billing cycle. The higher
+  //          plan applies now, the renewal date stays, and you pay only the prorated
+  //          price difference for the days left. (Downgrades & period changes: at renewal.) --------
   if (changeMode) {
-    // Mirror the server's period-aware proration for the live preview.
     const currentPeriod = data.subscriptionPeriod && PERIOD_MONTHS[data.subscriptionPeriod] ? data.subscriptionPeriod : 'monthly';
-    const samePeriod = period === currentPeriod;
-    // Credit for the unused portion of the CURRENT prepaid term (independent of the new period).
     const pDays = PERIOD_MONTHS[currentPeriod] * 30;
     const daysRemaining = Math.min(pDays, Math.max(0, Math.ceil((new Date(data.subscriptionUntil).getTime() - Date.now()) / 86400000)));
     const fraction = pDays > 0 ? daysRemaining / pDays : 0;
     const oldTermPrice = data.subscriptionTermPrice > 0 ? data.subscriptionTermPrice : ((data.plan && data.plan.pricing && data.plan.pricing[currentPeriod]) || 0);
-    const credit = Math.round(oldTermPrice * fraction);
-    // Charge: prorated new plan for the remaining days (same period) or a full fresh term (different period).
-    const charge = samePeriod
-      ? Math.round(((targetPlan.pricing && targetPlan.pricing[currentPeriod]) || 0) * fraction)
-      : ((targetPlan.pricing && targetPlan.pricing[period]) || 0);
-    const dueAfterTermCredit = Math.max(0, charge - credit);
-    const bankedCredit = Math.max(0, credit - charge);
-    const balance = data.creditBalance || 0;
-    const balanceUsed = Math.min(balance, dueAfterTermCredit);
-    const netPay = dueAfterTermCredit - balanceUsed;
-    const upgrade = (targetPlan.price_monthly || 0) > ((data.plan && data.plan.price_monthly) || 0);
-    const newExpiry = samePeriod ? fmtDate(data.subscriptionUntil) : previewExpiry('', PERIOD_MONTHS[period]);
-    const Row = ({ label, val, sign }) => (
-      <div className="row" style={{ justifyContent: 'space-between', padding: '3px 0' }}>
-        <span className="muted">{label}</span><b>{sign === '-' ? '−' : ''}{inr(val)}</b>
-      </div>
-    );
+    const newTermPrice = (targetPlan.pricing && targetPlan.pricing[currentPeriod]) || 0;
+    const charge = Math.max(0, Math.round((newTermPrice - oldTermPrice) * fraction));
+    const rupees = (n) => '₹' + Number(n || 0).toLocaleString('en-IN');
     return (
-      <Modal title={`${upgrade ? 'Upgrade to' : 'Change to'} ${targetPlan.name}`} onClose={onClose}>
+      <Modal title={`Upgrade to ${targetPlan.name}`} onClose={onClose}>
         <p className="muted" style={{ marginTop: 0 }}>
           You're on <b>{data.plan ? data.plan.name : '—'}</b> ({periodLabel(currentPeriod).toLowerCase()}), active until <b>{fmtDate(data.subscriptionUntil)}</b>.
-          The <b>{targetPlan.name}</b> plan{targetPlan.max_students != null ? ` (up to ${targetPlan.max_students} students)` : ''} applies <b>immediately</b>. Choose a billing period:
+          The <b>{targetPlan.name}</b> plan{targetPlan.max_students != null ? ` (up to ${targetPlan.max_students} students)` : ''} applies <b>immediately</b>, on the same <b>{periodLabel(currentPeriod).toLowerCase()}</b> cycle — your renewal date <b>doesn't move</b>.
         </p>
-        <div style={{ display: 'grid', gap: 8 }}>
-          {RENEW_PERIODS.map((p) => (
-            <label key={p.key} className="choice" style={{ display: 'flex', alignItems: 'center', gap: 10, ...(period === p.key ? { border: '2px solid var(--brand)' } : {}) }}>
-              <input type="radio" name="change-period" checked={period === p.key} onChange={() => setPeriod(p.key)} style={{ width: 'auto' }} />
-              <span style={{ flex: 1 }}>
-                {p.label}{' '}
-                {p.key === currentPeriod
-                  ? <span className="pill green" style={{ fontSize: 11 }}>keeps your renewal date</span>
-                  : <span className="muted" style={{ fontSize: 12 }}>· new term</span>}
-              </span>
-              <b>{inr((targetPlan.pricing && targetPlan.pricing[p.key]) || 0)}</b>
-            </label>
-          ))}
-        </div>
-        <div style={{ border: '1px solid var(--line)', borderRadius: 10, padding: '10px 14px', fontSize: 14, marginTop: 12 }}>
-          <Row label={samePeriod ? `${targetPlan.name} for the remaining ${daysRemaining} day(s)` : `${targetPlan.name} — new ${periodLabel(period).toLowerCase()} term`} val={charge} />
-          <Row label={`Credit for unused ${data.plan ? data.plan.name : ''} term`} val={credit} sign="-" />
-          {balanceUsed > 0 && <Row label="Existing credit balance applied" val={balanceUsed} sign="-" />}
-          <div className="row" style={{ justifyContent: 'space-between', padding: '8px 0 0', marginTop: 6, borderTop: '1px solid var(--line)', fontSize: 16 }}>
-            <b>You pay now</b><b style={{ color: 'var(--brand)' }}>{inr(netPay)}</b>
+        <div style={{ border: '1px solid var(--line)', borderRadius: 10, padding: '10px 14px', fontSize: 14 }}>
+          <div className="row" style={{ justifyContent: 'space-between', padding: '3px 0' }}>
+            <span className="muted">{targetPlan.name} − {data.plan ? data.plan.name : ''}, prorated for the {daysRemaining} day(s) left</span>
           </div>
-          {bankedCredit > 0 && <p className="muted" style={{ fontSize: 12, margin: '6px 0 0' }}>₹{Number(bankedCredit).toLocaleString('en-IN')} will be credited to your balance for a future renewal.</p>}
+          <div className="row" style={{ justifyContent: 'space-between', padding: '8px 0 0', marginTop: 6, borderTop: '1px solid var(--line)', fontSize: 16 }}>
+            <b>You pay now</b><b style={{ color: 'var(--brand)' }}>{rupees(charge)}</b>
+          </div>
         </div>
         <p className="muted" style={{ fontSize: 13, marginTop: 10 }}>
-          {samePeriod
-            ? <>Your renewal date <b>doesn't move</b> — still <b>{newExpiry}</b>.</>
-            : <>Starts a <b>new {periodLabel(period).toLowerCase()} term</b> today → active until <b>{newExpiry}</b>.</>}
+          To change your billing period (e.g. to annual) or move to a lower plan, do it at renewal.
         </p>
         <div className="msg" style={{ background: '#eef2ff', color: 'var(--brand-dark)', fontSize: 13, marginTop: 8 }}>
-          💳 Online payment is coming soon. For now this applies the change and records the amounts.
+          💳 Online payment is coming soon. For now this applies the upgrade and records the amount.
         </div>
         {msg && <Msg text={msg.text} kind={msg.ok ? 'ok' : 'error'} />}
         <div className="row" style={{ marginTop: 16, gap: 10 }}>
-          <button className="btn" onClick={confirm} disabled={busy}>{busy ? 'Working…' : (netPay > 0 ? `${upgrade ? 'Upgrade' : 'Change'} — ${inr(netPay)}` : `${upgrade ? 'Upgrade' : 'Change'} plan`)}</button>
+          <button className="btn" onClick={confirm} disabled={busy}>{busy ? 'Working…' : (charge > 0 ? `Upgrade — ${rupees(charge)}` : 'Upgrade plan')}</button>
           <button className="btn ghost" onClick={onClose}>Cancel</button>
         </div>
       </Modal>

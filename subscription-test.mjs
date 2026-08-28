@@ -115,42 +115,49 @@ const daysOut = Math.round((new Date(yr.expiresAt).getTime() - Date.now()) / 864
 if (daysOut < 300) throw new Error('annual renewal should extend ~1 year, got ' + daysOut + ' days');
 ok('billing periods extend the subscription by the right length (annual ≈ 1 year)');
 
-// Mid-cycle plan change while ACTIVE keeps the renewal date and prorates.
+// Mid-term, a plan UPGRADE on the SAME cycle keeps the renewal date and charges
+// only the prorated price difference (no credit concept).
 const before = (await call(root, '/api/my-org/plan')).data.subscriptionUntil;
 const basic = orgPlan.plans.find((p) => p.name === 'Basic');
-const up = await call(root, '/api/my-org/renew', 'POST', { planId: basic.id }); // no period → change mode
-if (up.data.mode !== 'change' || up.data.planName !== 'Basic' || !up.data.upgrade) throw new Error('mid-cycle switch to a pricier plan should be an upgrade (change mode): ' + JSON.stringify(up.data));
+const up = await call(root, '/api/my-org/renew', 'POST', { planId: basic.id }); // no period → mid-term change
+if (up.data.mode !== 'change' || up.data.planName !== 'Basic' || !up.data.upgrade) throw new Error('a mid-term switch to a higher plan should be an upgrade (change mode): ' + JSON.stringify(up.data));
 if (up.data.expiresAt !== before) throw new Error('an upgrade must NOT move the renewal date');
-if (!(up.data.charge > 0) || !(up.data.netPay > 0)) throw new Error('upgrading (from a free term) should charge for the new plan: ' + JSON.stringify(up.data));
+if (!(up.data.charge > 0)) throw new Error('an upgrade should charge the prorated difference: ' + JSON.stringify(up.data));
 if ((await call(root, '/api/my-org/plan')).data.plan.name !== 'Basic') throw new Error('the org should now be on Basic');
-ok('mid-cycle upgrade: new plan immediately, date unchanged, period-aware charge computed');
+ok('mid-term upgrade: higher plan immediately, date unchanged, prorated difference charged');
 
-// Downgrading a paid term banks the unused value as credit (no refund, date unchanged).
+// Mid-term you CANNOT downgrade — that is a renewal-time choice.
 const free = orgPlan.plans.find((p) => p.name === 'Free');
-const down = await call(root, '/api/my-org/renew', 'POST', { planId: free.id });
-if (down.data.mode !== 'change' || down.data.upgrade || down.data.netPay !== 0) throw new Error('a downgrade should be change-mode with no charge: ' + JSON.stringify(down.data));
-if (!(down.data.bankedCredit > 0) || !(down.data.creditBalance > 0)) throw new Error('downgrading a paid term should bank credit: ' + JSON.stringify(down.data));
-if (down.data.expiresAt !== before) throw new Error('a downgrade must not move the renewal date');
-ok('mid-cycle downgrade: no charge, unused value banked as credit, date unchanged');
+const down = await call(root, '/api/my-org/renew', 'POST', { planId: free.id }, false);
+if (down.status !== 400) throw new Error('a mid-term downgrade should be rejected (400): ' + JSON.stringify(down.data));
+if ((await call(root, '/api/my-org/plan')).data.plan.name !== 'Basic') throw new Error('a rejected downgrade must not change the plan');
+ok('mid-term downgrade is blocked (do it at renewal)');
 
-// The billing ledger records every transaction and exposes the credit balance.
+// Every subscribe / renew / upgrade is recorded in the billing history.
 const hist = (await call(root, '/api/my-org/transactions')).data;
-if (!(hist.transactions.length >= 2)) throw new Error('billing history should record transactions');
-if (hist.creditBalance !== down.data.creditBalance) throw new Error('history credit balance should match the org balance');
-ok('billing history + credit balance are recorded and match');
+if (!(hist.transactions.length >= 1)) throw new Error('billing history should record transactions');
+if (hist.transactions[0].kind !== 'upgrade' || !(hist.transactions[0].charged > 0)) throw new Error('the latest history row should be the recorded upgrade: ' + JSON.stringify(hist.transactions[0]));
+ok('billing history records each transaction (upgrade amount recorded)');
 
-// Changing plan AND picking a different billing period starts a fresh term today
-// (date moves), credits the unused current term, and applies any banked balance.
+// Renewal can change the billing period freely — move the org onto a quarterly term.
 const standard = orgPlan.plans.find((p) => p.name === 'Standard');
-const balBefore = (await call(root, '/api/my-org/transactions')).data.creditBalance;
-const pc = await call(root, '/api/my-org/renew', 'POST', { planId: standard.id, period: 'quarterly' });
-if (pc.data.mode !== 'change' || !pc.data.periodChanged) throw new Error('picking a different period should start a fresh term (periodChanged): ' + JSON.stringify(pc.data));
-if (pc.data.period !== 'quarterly') throw new Error('the subscription period should update to the chosen one');
-const q90 = Math.round((new Date(pc.data.expiresAt).getTime() - Date.now()) / 86400000);
-if (q90 < 80 || q90 > 100) throw new Error('a fresh quarterly term should land ~90 days out, got ' + q90);
-if (!(pc.data.charge > 0)) throw new Error('a fresh term should charge the full new-period price');
-if (balBefore > 0 && !(pc.data.balanceUsed > 0)) throw new Error('an existing credit balance should apply to the fresh term');
-ok('plan change with a new period: fresh term, renewal date moves, credit balance applied');
+const rq = await call(root, '/api/my-org/renew', 'POST', { period: 'quarterly' });
+if (rq.data.period !== 'quarterly') throw new Error('renewal should be able to switch the billing period: ' + JSON.stringify(rq.data));
+ok('renewal can change the billing period (any cadence at renewal)');
+
+// Mid-term the billing period cannot change — not even bundled with a plan upgrade.
+const pcLong = await call(root, '/api/my-org/renew', 'POST', { planId: standard.id, period: 'yearly' }, false);
+if (pcLong.status !== 400) throw new Error('a mid-term billing-period change should be rejected (400): ' + JSON.stringify(pcLong.data));
+const pcShort = await call(root, '/api/my-org/renew', 'POST', { planId: standard.id, period: 'monthly' }, false);
+if (pcShort.status !== 400) throw new Error('a mid-term billing-period change should be rejected (400): ' + JSON.stringify(pcShort.data));
+ok('mid-term billing-period change is blocked (any period → change it at renewal)');
+
+// A same-cycle mid-term upgrade to Standard works and keeps the (quarterly) renewal date.
+const beforeQ = (await call(root, '/api/my-org/plan')).data.subscriptionUntil;
+const upS = await call(root, '/api/my-org/renew', 'POST', { planId: standard.id }); // same period, upgrade
+if (upS.data.mode !== 'change' || !upS.data.upgrade || upS.data.expiresAt !== beforeQ) throw new Error('a same-cycle upgrade should keep the renewal date: ' + JSON.stringify(upS.data));
+if (!(upS.data.charge > 0)) throw new Error('the upgrade should charge the prorated difference');
+ok('same-cycle mid-term upgrade to a higher plan keeps the renewal date');
 
 // A non-root teacher cannot renew.
 const nonRoot = makeJar();

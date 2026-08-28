@@ -1,12 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
 import { api } from '../api.js';
-import { Msg, Modal, copyText } from '../components.jsx';
+import { Msg, Modal, copyText, nameFirst, nameLast } from '../components.jsx';
 import { useConfirm } from '../confirm.jsx';
 
 export default function StudentsTab({ readOnly }) {
   const [students, setStudents] = useState(null);
   const [query, setQuery] = useState('');
-  const [form, setForm] = useState({ name: '', email: '', phone: '', accessUntil: '' });
+  const [form, setForm] = useState({ firstName: '', lastName: '', email: '', phone: '', accessUntil: '' });
   const [msg, setMsg] = useState(null); // { text, ok }
   const [selectedId, setSelectedId] = useState(null); // signup-invite id (s.id)
   const [showAdd, setShowAdd] = useState(false);
@@ -21,7 +21,7 @@ export default function StudentsTab({ readOnly }) {
   async function addStudent() {
     try {
       await api('/api/students', 'POST', form);
-      setForm({ name: '', email: '', phone: '', accessUntil: '' });
+      setForm({ firstName: '', lastName: '', email: '', phone: '', accessUntil: '' });
       setQuery('');
       setMsg({ text: 'Student created! Click the student to open their page and copy the signup link.', ok: true });
       load('');
@@ -44,7 +44,8 @@ export default function StudentsTab({ readOnly }) {
         <p className="muted">Create a student, then open their page to copy their unique signup link and send it to them.</p>
         {msg && <Msg text={msg.text} kind={msg.ok ? 'ok' : 'error'} />}
         <div className="grid two">
-          <div><label>Student name</label><input type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></div>
+          <div><label>First name</label><input type="text" value={form.firstName} onChange={(e) => setForm({ ...form, firstName: e.target.value })} /></div>
+          <div><label>Last name</label><input type="text" value={form.lastName} onChange={(e) => setForm({ ...form, lastName: e.target.value })} /></div>
           <div><label>Student email</label><input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></div>
           <div><label>Phone number</label><input type="tel" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="e.g. +91 98765 43210" /></div>
           <div><label>Access until (optional)</label><input type="date" value={form.accessUntil} onChange={(e) => setForm({ ...form, accessUntil: e.target.value })} /></div>
@@ -265,18 +266,25 @@ async function copyToClipboard(text, btn) {
 }
 
 function EditStudentModal({ student, onClose, onSaved }) {
-  const [name, setName] = useState(student.name);
+  const [first, setFirst] = useState(student.firstName ?? nameFirst(student.name));
+  const [last, setLast] = useState(student.lastName ?? nameLast(student.name));
   const [phone, setPhone] = useState(student.phone || '');
   const [accessUntil, setAccessUntil] = useState(student.accessUntil || '');
   const [msg, setMsg] = useState('');
   async function save() {
-    try { await api('/api/students/' + student.id, 'PUT', { name, phone, accessUntil }); onSaved(); }
-    catch (e) { setMsg(e.message); }
+    try {
+      const name = `${first.trim()} ${last.trim()}`.trim();
+      await api('/api/students/' + student.id, 'PUT', { name, firstName: first.trim(), lastName: last.trim(), phone, accessUntil });
+      onSaved();
+    } catch (e) { setMsg(e.message); }
   }
   return (
     <Modal title="Edit student" onClose={onClose}>
       <Msg text={msg} />
-      <label>Name</label><input type="text" value={name} onChange={(e) => setName(e.target.value)} />
+      <div className="grid two">
+        <div><label>First name</label><input type="text" value={first} onChange={(e) => setFirst(e.target.value)} /></div>
+        <div><label>Last name</label><input type="text" value={last} onChange={(e) => setLast(e.target.value)} /></div>
+      </div>
       <label>Email (cannot be changed)</label><input type="email" value={student.email} disabled />
       <label>Phone number</label><input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} />
       <label>Access until (optional)</label><input type="date" value={accessUntil} onChange={(e) => setAccessUntil(e.target.value)} />

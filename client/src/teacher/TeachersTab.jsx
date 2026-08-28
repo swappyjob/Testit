@@ -1,13 +1,13 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api.js';
-import { Msg, Modal, copyText } from '../components.jsx';
+import { Msg, Modal, copyText, nameFirst, nameLast } from '../components.jsx';
 import { useConfirm, useAlert } from '../confirm.jsx';
 
 export default function TeachersTab({ readOnly }) {
   const confirm = useConfirm();
   const alert = useAlert();
   const [data, setData] = useState(null); // { teachers, canManage }
-  const [form, setForm] = useState({ name: '', email: '', phone: '', role: 'teacher' });
+  const [form, setForm] = useState({ firstName: '', lastName: '', email: '', phone: '', role: 'teacher' });
   const [editing, setEditing] = useState(null); // teacher row being edited
   const [showAdd, setShowAdd] = useState(false);
   const [msg, setMsg] = useState(null);
@@ -17,8 +17,8 @@ export default function TeachersTab({ readOnly }) {
 
   async function addTeacher() {
     try {
-      await api('/api/teachers', 'POST', { name: form.name, email: form.email, phone: form.phone, isRoot: form.role === 'root' });
-      setForm({ name: '', email: '', phone: '', role: 'teacher' });
+      await api('/api/teachers', 'POST', { firstName: form.firstName, lastName: form.lastName, email: form.email, phone: form.phone, isRoot: form.role === 'root' });
+      setForm({ firstName: '', lastName: '', email: '', phone: '', role: 'teacher' });
       setMsg({ ok: true, text: 'Teacher created! Use the "Copy link" button below to share their signup link.' });
       load();
     } catch (e) { setMsg({ ok: false, text: e.message }); }
@@ -54,7 +54,8 @@ export default function TeachersTab({ readOnly }) {
           <p className="muted">Invite another teacher and choose their role. Root teachers can add more teachers; normal teachers cannot.</p>
           {msg && <Msg text={msg.text} kind={msg.ok ? 'ok' : 'error'} />}
           <div className="grid two">
-            <div><label>Teacher name</label><input type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></div>
+            <div><label>First name</label><input type="text" value={form.firstName} onChange={(e) => setForm({ ...form, firstName: e.target.value })} /></div>
+            <div><label>Last name</label><input type="text" value={form.lastName} onChange={(e) => setForm({ ...form, lastName: e.target.value })} /></div>
             <div><label>Teacher email</label><input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></div>
             <div><label>Phone number</label><input type="tel" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="e.g. +91 98765 43210" /></div>
             <div>
@@ -124,13 +125,15 @@ export default function TeachersTab({ readOnly }) {
 const tokenFromPath = (p) => { try { return new URLSearchParams((p || '').split('?')[1]).get('token'); } catch { return null; } };
 
 function EditTeacherModal({ teacher, onClose, onSaved }) {
-  const [name, setName] = useState(teacher.name);
+  const [first, setFirst] = useState(teacher.firstName ?? nameFirst(teacher.name));
+  const [last, setLast] = useState(teacher.lastName ?? nameLast(teacher.name));
   const [phone, setPhone] = useState(teacher.phone || '');
   const [role, setRole] = useState(teacher.isRoot ? 'root' : 'teacher');
   const [msg, setMsg] = useState('');
   async function save() {
     try {
-      const body = { name, phone, isRoot: role === 'root' };
+      const name = `${first.trim()} ${last.trim()}`.trim();
+      const body = { name, firstName: first.trim(), lastName: last.trim(), phone, isRoot: role === 'root' };
       if (teacher.signedUp) await api('/api/teachers/' + teacher.id, 'PUT', body);
       else await api('/api/teacher-invites/' + tokenFromPath(teacher.signupPath), 'PUT', body);
       onSaved();
@@ -139,7 +142,10 @@ function EditTeacherModal({ teacher, onClose, onSaved }) {
   return (
     <Modal title={teacher.signedUp ? 'Edit teacher' : 'Edit invited teacher'} onClose={onClose}>
       <Msg text={msg} />
-      <label>Name</label><input type="text" value={name} onChange={(e) => setName(e.target.value)} />
+      <div className="grid two">
+        <div><label>First name</label><input type="text" value={first} onChange={(e) => setFirst(e.target.value)} /></div>
+        <div><label>Last name</label><input type="text" value={last} onChange={(e) => setLast(e.target.value)} /></div>
+      </div>
       <label>Email (cannot be changed)</label><input type="email" value={teacher.email} disabled />
       <label>Phone number</label><input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="e.g. +91 98765 43210" />
       <label>Role</label>

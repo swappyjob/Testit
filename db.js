@@ -343,6 +343,16 @@ async function init() {
   await pool.query('ALTER TABLE organizations ADD COLUMN IF NOT EXISTS subscription_term_price INTEGER NOT NULL DEFAULT 0');
   await pool.query('ALTER TABLE organizations ADD COLUMN IF NOT EXISTS credit_balance INTEGER NOT NULL DEFAULT 0');
 
+  // First / last name as real fields (the single `name` column stays the display
+  // name, kept in sync as "first last"). Backfill existing rows once by splitting
+  // the current name on its first space.
+  await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS first_name TEXT NOT NULL DEFAULT ''");
+  await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_name TEXT NOT NULL DEFAULT ''");
+  await pool.query(`UPDATE users
+    SET first_name = split_part(btrim(name), ' ', 1),
+        last_name  = btrim(substr(btrim(name), length(split_part(btrim(name), ' ', 1)) + 1))
+    WHERE first_name = '' AND btrim(name) <> ''`);
+
   // Billing ledger: one row per subscribe / renew / upgrade / downgrade, so the
   // org has a visible history and the credit balance has a source of truth.
   await pool.query(`CREATE TABLE IF NOT EXISTS subscription_transactions (

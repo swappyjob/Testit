@@ -1,12 +1,14 @@
 import { useState, useEffect } from 'react';
-import { api } from '../api.js';
+import { api, logout } from '../api.js';
 import { useRequireRole } from '../auth.js';
-import { DashboardBar, Modal, Msg, PasswordInput } from '../components.jsx';
+import { DashboardBar } from '../components.jsx';
+import { useConfirm } from '../confirm.jsx';
 import MyTests from '../teacher/MyTests.jsx';
 import TestBuilder from '../teacher/TestBuilder.jsx';
 import StudentsTab from '../teacher/StudentsTab.jsx';
 import TeachersTab from '../teacher/TeachersTab.jsx';
-import SubscriptionTab from '../teacher/SubscriptionTab.jsx';
+import SubscriptionTab, { BillingTab } from '../teacher/SubscriptionTab.jsx';
+import ProfileDetails from '../teacher/ProfileDetails.jsx';
 import SubscribeModal, { renewResultMessage } from '../teacher/SubscribeModal.jsx';
 import QuestionBank from '../teacher/QuestionBank.jsx';
 import AuditLogs from '../teacher/AuditLogs.jsx';
@@ -15,12 +17,12 @@ import TeacherHome from '../teacher/TeacherHome.jsx';
 
 export default function TeacherDashboard() {
   const me = useRequireRole('teacher', '/teacher-login');
+  const confirm = useConfirm();
   const [tab, setTab] = useState('home');
   const [editTestId, setEditTestId] = useState(null);
   const [draftId, setDraftId] = useState(null);
   const [resultsFor, setResultsFor] = useState(null); // open this test's results in My Tests
-  const [showProfile, setShowProfile] = useState(false);
-  const [profilePane, setProfilePane] = useState('account');
+  const [meOverride, setMeOverride] = useState(null); // local name updates (reflect in top bar)
   const [orgPlan, setOrgPlan] = useState(null); // { plan, studentCount, plans }
   const [limitDismissed, setLimitDismissed] = useState(false);
   const [expiryDismissed, setExpiryDismissed] = useState(false);
@@ -35,8 +37,12 @@ export default function TeacherDashboard() {
   }, []);
 
   if (!me) return null;
+  const u = meOverride ? { ...me, ...meOverride } : me;
 
-  const openProfile = (pane = 'account') => { setProfilePane(pane); setShowProfile(true); };
+  const openProfile = (pane = 'profile') => setTab(pane);
+  async function confirmLogout() {
+    if (await confirm({ title: 'Log out?', body: 'You will need to sign in again to access your organization.', confirmLabel: 'Log out' })) logout();
+  }
   const cap = orgPlan && orgPlan.plan ? orgPlan.plan.max_students : null;
   const used = orgPlan ? orgPlan.studentCount : null;
   const atLimit = cap != null && used != null && used >= cap;
@@ -68,8 +74,8 @@ export default function TeacherDashboard() {
 
   return (
     <>
-      <DashboardBar who={me.name + ' · ' + (me.isRoot ? 'Root teacher' : 'Teacher')} orgName={me.orgName}>
-        <button className="btn ghost small" onClick={() => openProfile('account')}>⚙ Profile</button>
+      <DashboardBar who={u.name + ' · ' + (me.isRoot ? 'Root teacher' : 'Teacher')} orgName={me.orgName} hideLogout>
+        <ProfileMenu isRoot={me.isRoot} onNavigate={setTab} onLogout={confirmLogout} />
       </DashboardBar>
       <div className="container">
         {renewMsg && (
@@ -115,7 +121,7 @@ export default function TeacherDashboard() {
             </span>
           </div>
         )}
-        {tab !== 'create' && tab !== 'home' && <StatsBar onNavigate={setTab} />}
+        {tab !== 'create' && tab !== 'home' && !['profile', 'subscription', 'billing'].includes(tab) && <StatsBar onNavigate={setTab} />}
         <div className="tabs">
           <Tab id="home" label="Home" icon="🏠" />
           <Tab id="tests" label="My Tests" icon="📋" />
@@ -133,8 +139,10 @@ export default function TeacherDashboard() {
         {tab === 'bank' && <QuestionBank readOnly={readOnly} />}
         {tab === 'audit' && <AuditLogs />}
         {tab === 'support' && <SupportTickets />}
+        {tab === 'profile' && <ProfileDetails me={u} onUpdated={(user) => setMeOverride(user)} />}
+        {tab === 'subscription' && <SubscriptionTab isRoot={me.isRoot} onContact={() => setTab('support')} />}
+        {tab === 'billing' && <BillingTab />}
       </div>
-      {showProfile && <ProfileModal me={me} initialPane={profilePane} onClose={() => setShowProfile(false)} onContactSupport={() => { setShowProfile(false); setTab('support'); }} />}
       {showRenew && (
         <SubscribeModal
           onClose={() => setShowRenew(false)}
@@ -186,52 +194,27 @@ function StatsBar({ onNavigate }) {
   );
 }
 
-function ProfileModal({ me, onClose, initialPane = 'account', onContactSupport }) {
-  // Only root teachers get the Subscription pane.
-  const [pane, setPane] = useState(me.isRoot ? initialPane : 'account');
-  const [cur, setCur] = useState('');
-  const [nw, setNw] = useState('');
-  const [confirm, setConfirm] = useState('');
-  const [msg, setMsg] = useState(null);
-  async function submit(e) {
-    e.preventDefault();
-    if (nw !== confirm) { setMsg({ ok: false, text: 'The new passwords do not match.' }); return; }
-    try {
-      await api('/api/change-password', 'POST', { currentPassword: cur, newPassword: nw });
-      setMsg({ ok: true, text: 'Password updated successfully! Other devices have been logged out.' });
-      setCur(''); setNw(''); setConfirm('');
-    } catch (e) { setMsg({ ok: false, text: e.message }); }
-  }
+// Profile dropdown in the top bar: Profile Details, Subscription & Billing
+// (root only), and Log out (with a confirmation dialog).
+function ProfileMenu({ isRoot, onNavigate, onLogout }) {
+  const [open, setOpen] = useState(false);
+  const go = (view) => { setOpen(false); onNavigate(view); };
+  const item = { display: 'block', width: '100%', textAlign: 'left', padding: '9px 14px', background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, whiteSpace: 'nowrap' };
   return (
-    <Modal title="Profile" onClose={onClose} wide>
-      <p className="muted">{me.name} · {me.email}</p>
-      {me.isRoot && (
-        <div className="tabs" style={{ marginTop: 10, marginBottom: 18 }}>
-          <button className={'tab' + (pane === 'account' ? ' active' : '')} onClick={() => setPane('account')}>🔒 Account</button>
-          <button className={'tab' + (pane === 'subscription' ? ' active' : '')} onClick={() => setPane('subscription')}>💳 Subscription</button>
-        </div>
-      )}
-
-      {pane === 'account' && (
+    <div style={{ position: 'relative' }}>
+      <button className="btn ghost small" onClick={() => setOpen((v) => !v)} aria-haspopup="true" aria-expanded={open}>⚙ Profile ▾</button>
+      {open && (
         <>
-          {msg && <Msg text={msg.text} kind={msg.ok ? 'ok' : 'error'} />}
-          <h3>Change password</h3>
-          <form onSubmit={submit}>
-            <label>Current password</label>
-            <PasswordInput value={cur} onChange={(e) => setCur(e.target.value)} required autoComplete="current-password" />
-            <label>New password (min 6 characters)</label>
-            <PasswordInput value={nw} onChange={(e) => setNw(e.target.value)} required autoComplete="new-password" />
-            <label>Confirm new password</label>
-            <PasswordInput value={confirm} onChange={(e) => setConfirm(e.target.value)} required autoComplete="new-password" />
-            <div className="row" style={{ marginTop: 18 }}>
-              <button className="btn" type="submit">Update password</button>
-              <button className="btn ghost" type="button" onClick={onClose}>Cancel</button>
-            </div>
-          </form>
+          <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+          <div role="menu" style={{ position: 'absolute', right: 0, top: 'calc(100% + 6px)', zIndex: 41, background: 'var(--surface, #fff)', border: '1px solid var(--line, #e2e8f0)', borderRadius: 10, boxShadow: '0 10px 30px rgba(0,0,0,0.12)', minWidth: 190, overflow: 'hidden', padding: '4px 0' }}>
+            <button style={item} onClick={() => go('profile')} onMouseDown={(e) => e.preventDefault()}>👤 Profile details</button>
+            {isRoot && <button style={item} onClick={() => go('subscription')} onMouseDown={(e) => e.preventDefault()}>💳 Subscription</button>}
+            {isRoot && <button style={item} onClick={() => go('billing')} onMouseDown={(e) => e.preventDefault()}>🧾 Billing</button>}
+            <div style={{ borderTop: '1px solid var(--line, #e2e8f0)', margin: '4px 0' }} />
+            <button style={{ ...item, color: 'var(--red, #dc2626)' }} onClick={() => { setOpen(false); onLogout(); }} onMouseDown={(e) => e.preventDefault()}>↩ Log out</button>
+          </div>
         </>
       )}
-
-      {pane === 'subscription' && <SubscriptionTab isRoot={me.isRoot} embedded onContact={onContactSupport} />}
-    </Modal>
+    </div>
   );
 }

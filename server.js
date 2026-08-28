@@ -269,11 +269,34 @@ async function logAudit(req, { action, entityType = '', entityId = null, entityL
 }
 
 const publicUser = (u) => ({
-  id: u.id, role: u.role, name: u.name, email: u.email, isRoot: !!u.is_root,
+  id: u.id, role: u.role, name: u.name, firstName: u.first_name || '', lastName: u.last_name || '',
+  email: u.email, isRoot: !!u.is_root,
   orgId: u.org_id, orgName: u.org_name || null,
   subscriptionUntil: u.org_subscription_until || null,
   subscriptionExpired: isExpired(u.org_subscription_until),
 });
+
+// Resolve a person's name from a request body. Accepts explicit firstName/lastName
+// (new forms) or a single legacy `name` / CSV value, and always returns all three
+// so callers store first_name, last_name and the combined display `name` together.
+function nameParts(body) {
+  if (body.firstName != null || body.lastName != null) {
+    const first = String(body.firstName || '').trim();
+    const last = String(body.lastName || '').trim();
+    return { first, last, name: `${first} ${last}`.trim() };
+  }
+  const name = String(body.name || '').trim();
+  const bits = name.split(/\s+/).filter(Boolean);
+  const first = bits.shift() || '';
+  return { first, last: bits.join(' '), name };
+}
+// Split an already-resolved display name into first/last (for CSV rows etc.).
+function splitName(name) {
+  const n = String(name || '').trim();
+  const bits = n.split(/\s+/).filter(Boolean);
+  const first = bits.shift() || '';
+  return { first, last: bits.join(' '), name: n };
+}
 
 // ============================================================================
 // AUTH
@@ -283,7 +306,7 @@ const publicUser = (u) => ({
 // admin can create organizations. (Does not log the new teacher in; the admin
 // hands over the credentials, or the teacher logs in themselves afterward.)
 app.post('/api/register-teacher', requireAdmin, h(async (req, res) => {
-  const name = (req.body.name || '').trim();
+  const { name, first, last } = nameParts(req.body);
   const email = (req.body.email || '').trim().toLowerCase();
   const password = req.body.password || '';
   if (!name || !email || !password)
@@ -299,8 +322,8 @@ app.post('/api/register-teacher', requireAdmin, h(async (req, res) => {
       [`${name}'s Organization`]
     )).rows[0].id;
     const uid = (await t.run(
-      'INSERT INTO users (role, name, email, password_hash, is_root, org_id) VALUES (?, ?, ?, ?, 1, ?) RETURNING id',
-      ['teacher', name, email, hashPassword(password), oid]
+      'INSERT INTO users (role, name, first_name, last_name, email, password_hash, is_root, org_id) VALUES (?, ?, ?, ?, ?, ?, 1, ?) RETURNING id',
+      ['teacher', name, first, last, email, hashPassword(password), oid]
     )).rows[0].id;
     return { newId: uid, orgId: oid };
   });
@@ -331,6 +354,16 @@ app.post('/api/logout', h(async (req, res) => {
 app.get('/api/me', (req, res) => {
   res.json({ user: req.user ? publicUser(req.user) : null });
 });
+
+// Update your own profile details (first/last name). Email and role are not
+// self-editable. Keeps the combined `name` in sync for display everywhere.
+app.patch('/api/me', requireAuth(), h(async (req, res) => {
+  const { first, last, name } = nameParts({ firstName: req.body.firstName || '', lastName: req.body.lastName || '' });
+  if (!first) return res.status(400).json({ error: 'First name is required.' });
+  await run('UPDATE users SET name = ?, first_name = ?, last_name = ? WHERE id = ?', [name, first, last, req.user.id]);
+  const user = await get('SELECT u.*, o.name AS org_name, o.subscription_expires_at AS org_subscription_until FROM users u LEFT JOIN organizations o ON o.id = u.org_id WHERE u.id = ?', [req.user.id]);
+  res.json({ ok: true, user: publicUser(user) });
+}));
 
 // Change your own password (any logged-in user).
 app.post('/api/change-password', requireAuth(), h(async (req, res) => {
@@ -398,7 +431,7 @@ app.post('/api/reset/:token', h(async (req, res) => {
 // STUDENTS + SIGNUP LINKS  (teacher creates students)
 // ============================================================================
 app.post('/api/students', requireAuth('teacher'), requireActiveSubscription, h(async (req, res) => {
-  const name = (req.body.name || '').trim();
+  const { name } = nameParts(req.body);
   const email = (req.body.email || '').trim().toLowerCase();
   const phone = (req.body.phone || '').trim();
   const accessUntil = readAccessUntil(req.body);
@@ -558,7 +591,7 @@ app.put('/api/students/:id', requireAuth('teacher'), requireActiveSubscription, 
     [Number(req.params.id), req.user.org_id]
   );
   if (!tok) return res.status(404).json({ error: 'Student not found.' });
-  const name = (req.body.name || '').trim();
+  const { name, first, last } = nameParts(req.body);
   const phone = (req.body.phone || '').trim();
   const accessUntil = readAccessUntil(req.body);
   if (!name) return res.status(400).json({ error: 'Student name is required.' });
@@ -571,7 +604,7 @@ app.put('/api/students/:id', requireAuth('teacher'), requireActiveSubscription, 
   await run('UPDATE signup_tokens SET name = ?, phone = ?, access_until = ? WHERE id = ?',
     [name, phone, accessUntil, tok.id]);
   if (tok.student_id) {
-    await run('UPDATE users SET name = ?, phone = ? WHERE id = ?', [name, phone, tok.student_id]);
+    await run('UPDATE users SET name = ?, first_name = ?, last_name = ?, phone = ? WHERE id = ?', [name, first, last, phone, tok.student_id]);
   }
   res.json({ ok: true });
 }));
@@ -592,7 +625,7 @@ app.post('/api/students/:id/reset-link', requireAuth('teacher'), requireActiveSu
 // TEACHERS  (root teachers can invite other teachers)
 // ============================================================================
 app.post('/api/teachers', requireRoot, requireActiveSubscription, h(async (req, res) => {
-  const name = (req.body.name || '').trim();
+  const { name } = nameParts(req.body);
   const email = (req.body.email || '').trim().toLowerCase();
   const phone = (req.body.phone || '').trim();
   const makeRoot = req.body.isRoot ? 1 : 0;
@@ -619,11 +652,11 @@ app.post('/api/teachers', requireRoot, requireActiveSubscription, h(async (req, 
 app.get('/api/teachers', requireAuth('teacher'), h(async (req, res) => {
   const isRoot = !!req.user.is_root;
   const signedUp = await all(
-    "SELECT id, name, email, phone, is_root, disabled FROM users WHERE role = 'teacher' AND org_id = ? ORDER BY id",
+    "SELECT id, name, first_name, last_name, email, phone, is_root, disabled FROM users WHERE role = 'teacher' AND org_id = ? ORDER BY id",
     [req.user.org_id]
   );
   const teachers = signedUp.map((u) => ({
-    id: u.id, name: u.name, email: u.email, phone: u.phone, isRoot: !!u.is_root, disabled: !!u.disabled,
+    id: u.id, name: u.name, firstName: u.first_name || '', lastName: u.last_name || '', email: u.email, phone: u.phone, isRoot: !!u.is_root, disabled: !!u.disabled,
     signedUp: true, isSelf: u.id === req.user.id, signupPath: null,
   }));
   if (isRoot) {
@@ -670,13 +703,13 @@ app.put('/api/teachers/:id', requireRoot, requireActiveSubscription, h(async (re
   const teacherId = Number(req.params.id);
   const t = await get("SELECT id FROM users WHERE id = ? AND role = 'teacher' AND org_id = ?", [teacherId, req.user.org_id]);
   if (!t) return res.status(404).json({ error: 'Teacher not found.' });
-  const name = (req.body.name || '').trim();
+  const { name, first, last } = nameParts(req.body);
   const phone = (req.body.phone || '').trim();
   let isRoot = req.body.isRoot ? 1 : 0;
   if (!name) return res.status(400).json({ error: 'Teacher name is required.' });
   if (!/^[\d+()\-\s]{6,20}$/.test(phone)) return res.status(400).json({ error: 'Please enter a valid phone number.' });
   if (teacherId === req.user.id) isRoot = 1;
-  await run('UPDATE users SET name = ?, phone = ?, is_root = ? WHERE id = ?', [name, phone, isRoot, teacherId]);
+  await run('UPDATE users SET name = ?, first_name = ?, last_name = ?, phone = ?, is_root = ? WHERE id = ?', [name, first, last, phone, isRoot, teacherId]);
   res.json({ ok: true });
 }));
 
@@ -839,7 +872,7 @@ app.get('/api/admins', requireAdmin, h(async (req, res) => {
 
 // An admin creates another platform admin.
 app.post('/api/admins', requireAdmin, h(async (req, res) => {
-  const name = (req.body.name || '').trim();
+  const { name, first, last } = nameParts(req.body);
   const email = (req.body.email || '').trim().toLowerCase();
   const password = req.body.password || '';
   if (!name || !email) return res.status(400).json({ error: 'Name and email are required.' });
@@ -848,8 +881,8 @@ app.post('/api/admins', requireAdmin, h(async (req, res) => {
   if (await get('SELECT id FROM users WHERE email = ?', [email]))
     return res.status(409).json({ error: 'That email is already in use.' });
   const id = (await run(
-    "INSERT INTO users (role, name, email, password_hash) VALUES ('admin', ?, ?, ?) RETURNING id",
-    [name, email, hashPassword(password)]
+    "INSERT INTO users (role, name, first_name, last_name, email, password_hash) VALUES ('admin', ?, ?, ?, ?, ?) RETURNING id",
+    [name, first, last, email, hashPassword(password)]
   )).rows[0].id;
   res.json({ id, name, email });
 }));
@@ -872,7 +905,6 @@ app.get('/api/my-org/plan', requireAuth('teacher'), h(async (req, res) => {
     subscriptionUntil: org ? (org.subscription_expires_at || '') : '',
     subscriptionPeriod: org ? (org.subscription_period || '') : '',
     subscriptionTermPrice: org ? (org.subscription_term_price || 0) : 0,
-    creditBalance: org ? (org.credit_balance || 0) : 0,
     subscriptionExpired: isExpired(org && org.subscription_expires_at),
   });
 }));
@@ -966,7 +998,6 @@ app.post('/api/my-org/renew', requireRoot, h(async (req, res) => {
   );
   if (!org) return res.status(404).json({ error: 'Organization not found.' });
   const active = !!org.subscription_expires_at && !isExpired(org.subscription_expires_at);
-  const balance = org.credit_balance || 0;
   const targetPlanId = req.body.planId ? Number(req.body.planId) : null;
   const switching = targetPlanId && targetPlanId !== org.plan_id;
 
@@ -980,53 +1011,52 @@ app.post('/api/my-org/renew', requireRoot, h(async (req, res) => {
     return { np };
   }
 
-  // ---- Mode: mid-cycle plan change — credit the unused term, then either keep the
-  //      renewal date (same billing period) or start a fresh term (different period) ----
+  // ---- Mode: mid-term plan change — UPGRADE only, on the SAME billing cycle.
+  //      The higher plan applies immediately, the renewal date is unchanged, and you
+  //      pay only the prorated PRICE DIFFERENCE for the days left. Downgrades and
+  //      billing-period changes are done at renewal (subscribe/renew below). ----
   if (switching && active) {
     const t = await loadTargetPlan();
     if (t.error) return res.status(t.code).json({ error: t.error });
-    const pr = computeProration(org, t.np); // pr.credit = unused value of the CURRENT term; pr.period = current period
-    const chosenPeriod = req.body.period ? String(req.body.period) : pr.period;
-    if (!isPeriod(chosenPeriod)) return res.status(400).json({ error: 'Choose a valid billing period.' });
+    const period = org.subscription_period && isPeriod(org.subscription_period) ? org.subscription_period : 'monthly';
+    // Mid-term the billing period can't change — that's a renewal-time choice.
+    if (req.body.period && String(req.body.period) !== period)
+      return res.status(400).json({ error: 'Your billing period can only be changed at renewal. Mid-term you can upgrade to a higher plan on your current cycle.' });
+    // Mid-term only upgrades are allowed — a downgrade is a renewal-time choice.
+    const upgrade = (t.np.price_monthly || 0) > (org.cur_monthly || 0);
+    if (!upgrade)
+      return res.status(400).json({ error: 'Mid-term you can only upgrade to a higher plan on your current billing cycle. To move to a lower plan or change your billing period, do it when you renew.' });
     const pay = await verifyRenewalPayment(req, t.np, 'change');
     if (!pay.ok) return res.status(402).json({ error: pay.error });
-    const upgrade = (t.np.price_monthly || 0) > (org.cur_monthly || 0);
-    const samePeriod = chosenPeriod === pr.period;
-    const credit = pr.credit; // unused value of the current prepaid term (always credited back)
-    // Same cadence → keep the renewal date, prorate the new plan for the remaining days.
-    // New cadence → start a fresh term today at the new plan's full period price.
-    const charge = samePeriod ? pr.charge : (periodPrice(t.np, chosenPeriod) || 0);
-    const newTermPrice = samePeriod ? pr.newTermPrice : charge;
-    const newExpiry = samePeriod ? org.subscription_expires_at : extendExpiry('', BILLING_PERIODS[chosenPeriod]);
-    const dueAfterTermCredit = Math.max(0, charge - credit); // new cost minus unused-term credit
-    const bankedCredit = Math.max(0, credit - charge);       // surplus credit → banked
-    const balanceUsed = Math.min(balance, dueAfterTermCredit);
-    const netPay = dueAfterTermCredit - balanceUsed;
-    const newBalance = balance - balanceUsed + bankedCredit;
+    const pDays = periodDays(period);
+    const daysRemaining = Math.min(pDays, daysUntil(org.subscription_expires_at));
+    const fraction = pDays > 0 ? daysRemaining / pDays : 0;
+    const curForPrice = { price_monthly: org.cur_monthly, price_quarterly: org.cur_q, price_half_yearly: org.cur_h, price_yearly: org.cur_y };
+    const oldTermPrice = org.subscription_term_price > 0 ? org.subscription_term_price : (periodPrice(curForPrice, period) || 0);
+    const newTermPrice = periodPrice(t.np, period) || 0;
+    const charge = Math.max(0, Math.round((newTermPrice - oldTermPrice) * fraction)); // prorated upgrade difference
     await tx(async (tt) => {
-      await tt.run(
-        'UPDATE organizations SET plan_id = ?, subscription_period = ?, subscription_term_price = ?, subscription_expires_at = ?, credit_balance = ? WHERE id = ?',
-        [targetPlanId, chosenPeriod, newTermPrice, newExpiry, newBalance, org.id]
-      );
+      // Plan (and its list price for the term) change; period & renewal date stay.
+      await tt.run('UPDATE organizations SET plan_id = ?, subscription_term_price = ? WHERE id = ?', [targetPlanId, newTermPrice, org.id]);
       await recordTxn(tt, org.id, {
-        kind: upgrade ? 'upgrade' : 'downgrade', planName: t.np.name, period: chosenPeriod, charged: netPay,
-        credit: (credit + balanceUsed) - bankedCredit, balanceAfter: newBalance, expiresAt: newExpiry,
-        note: `${org.plan_name} → ${t.np.name}${samePeriod ? `, ${pr.daysRemaining} day(s) left` : `, new ${chosenPeriod} term`}${bankedCredit ? `; ₹${bankedCredit} credited to balance` : ''}`,
+        kind: 'upgrade', planName: t.np.name, period, charged: charge, credit: 0, balanceAfter: 0,
+        expiresAt: org.subscription_expires_at,
+        note: `${org.plan_name} → ${t.np.name}, ${daysRemaining} day(s) left on the ${period} term`,
         actorName: req.user.name,
       });
     });
     await logAudit(req, {
       action: 'subscription.change', entityType: 'organization', entityId: org.id, entityLabel: org.name,
-      details: `${upgrade ? 'Upgraded' : 'Changed'} ${org.plan_name} → ${t.np.name} (${chosenPeriod})${samePeriod ? `; renewal date unchanged (${newExpiry})` : `; new term → ${newExpiry}`}; charge ₹${charge} − credit ₹${credit} = pay ₹${netPay}${bankedCredit ? `; banked ₹${bankedCredit}` : ''}${pay.manual ? ' (manual — no gateway yet)' : ''}`,
+      details: `Upgraded ${org.plan_name} → ${t.np.name} (${period}); renewal date unchanged (${org.subscription_expires_at}); prorated difference ₹${charge} for ${daysRemaining} day(s)${pay.manual ? ' (manual — no gateway yet)' : ''}`,
     });
     return res.json({
-      ok: true, mode: 'change', upgrade, planName: t.np.name, expiresAt: newExpiry,
-      period: chosenPeriod, periodChanged: !samePeriod, daysRemaining: pr.daysRemaining, credit, charge,
-      balanceUsed, bankedCredit, netPay, creditBalance: newBalance, manual: !!pay.manual, switched: true,
+      ok: true, mode: 'change', upgrade: true, planName: t.np.name, expiresAt: org.subscription_expires_at,
+      period, daysRemaining, charge, netPay: charge, manual: !!pay.manual, switched: true,
     });
   }
 
-  // ---- Mode: fresh subscribe (expired) or renew (same plan) — needs a period ----
+  // ---- Mode: fresh subscribe (expired / plan switch) or renew (same plan). This is
+  //      where the billing PERIOD is chosen — any period is allowed here. Full term. ----
   const period = String(req.body.period || 'monthly');
   if (!isPeriod(period)) return res.status(400).json({ error: 'Choose a valid billing period.' });
   let planForPrice = { name: org.plan_name, price_monthly: org.cur_monthly, price_quarterly: org.cur_q, price_half_yearly: org.cur_h, price_yearly: org.cur_y };
@@ -1038,35 +1068,31 @@ app.post('/api/my-org/renew', requireRoot, h(async (req, res) => {
   const pay = await verifyRenewalPayment(req, planForPrice, period);
   if (!pay.ok) return res.status(402).json({ error: pay.error });
   const termPrice = periodPrice(planForPrice, period) || 0;
-  const balanceUsed = Math.min(balance, termPrice);
-  const netPay = termPrice - balanceUsed;
-  const newBalance = balance - balanceUsed;
   const newExpiry = extendExpiry(switching ? '' : org.subscription_expires_at, BILLING_PERIODS[period]);
   await tx(async (t) => {
     if (switching) await t.run('UPDATE organizations SET plan_id = ? WHERE id = ?', [targetPlanId, org.id]);
-    await t.run('UPDATE organizations SET subscription_expires_at = ?, subscription_period = ?, subscription_term_price = ?, credit_balance = ? WHERE id = ?',
-      [newExpiry, period, termPrice, newBalance, org.id]);
+    await t.run('UPDATE organizations SET subscription_expires_at = ?, subscription_period = ?, subscription_term_price = ? WHERE id = ?',
+      [newExpiry, period, termPrice, org.id]);
     await recordTxn(t, org.id, {
-      kind: switching ? 'subscribe' : 'renew', planName: planForPrice.name, period, charged: netPay,
-      credit: balanceUsed, balanceAfter: newBalance, expiresAt: newExpiry, note: '', actorName: req.user.name,
+      kind: switching ? 'subscribe' : 'renew', planName: planForPrice.name, period, charged: termPrice,
+      credit: 0, balanceAfter: 0, expiresAt: newExpiry, note: '', actorName: req.user.name,
     });
   });
   await logAudit(req, {
     action: switching ? 'subscription.subscribe' : 'subscription.renew', entityType: 'organization', entityId: org.id, entityLabel: org.name,
-    details: `${switching ? 'Subscribed' : 'Renewed'} ${planForPrice.name} (${period}${pay.manual ? ', manual — no gateway yet' : ''}) → expires ${newExpiry}; charge ₹${termPrice}${balanceUsed ? ` − credit ₹${balanceUsed}` : ''} = pay ₹${netPay}`,
+    details: `${switching ? 'Subscribed' : 'Renewed'} ${planForPrice.name} (${period}${pay.manual ? ', manual — no gateway yet' : ''}) → expires ${newExpiry}; charge ₹${termPrice}`,
   });
-  res.json({ ok: true, mode: switching ? 'subscribe' : 'renew', planName: planForPrice.name, expiresAt: newExpiry, period, amount: termPrice, charged: netPay, balanceUsed, creditBalance: newBalance, manual: !!pay.manual, switched: !!switching });
+  res.json({ ok: true, mode: switching ? 'subscribe' : 'renew', planName: planForPrice.name, expiresAt: newExpiry, period, amount: termPrice, charged: termPrice, manual: !!pay.manual, switched: !!switching });
 }));
 
-// A teacher views their organization's billing history (subscribe/renew/change).
+// A teacher views their organization's billing history (subscribe/renew/upgrade).
 app.get('/api/my-org/transactions', requireAuth('teacher'), h(async (req, res) => {
   const rows = await all(
-    `SELECT kind, plan_name, period, charged, credit, balance_after, expires_at, note, actor_name, created_at
+    `SELECT kind, plan_name, period, charged, expires_at, note, actor_name, created_at
        FROM subscription_transactions WHERE org_id = ? ORDER BY id DESC LIMIT 50`,
     [req.user.org_id]
   );
-  const bal = await get('SELECT credit_balance FROM organizations WHERE id = ?', [req.user.org_id]);
-  res.json({ creditBalance: (bal && bal.credit_balance) || 0, transactions: rows });
+  res.json({ transactions: rows });
 }));
 
 // List organizations with their teachers (signed up + pending) and counts.
@@ -1152,14 +1178,14 @@ app.put('/api/admin/teachers/:id', requireAdmin, h(async (req, res) => {
   const teacherId = Number(req.params.id);
   const t = await get("SELECT id FROM users WHERE id = ? AND role = 'teacher'", [teacherId]);
   if (!t) return res.status(404).json({ error: 'Teacher not found.' });
-  const name = (req.body.name || '').trim();
+  const { name, first, last } = nameParts(req.body);
   const phone = (req.body.phone || '').trim();
   const isRoot = req.body.isRoot ? 1 : 0;
   if (!name) return res.status(400).json({ error: 'Teacher name is required.' });
   if (!phone) return res.status(400).json({ error: 'Teacher phone number is required.' });
   if (!/^[\d+()\-\s]{6,20}$/.test(phone))
     return res.status(400).json({ error: 'Please enter a valid phone number.' });
-  await run('UPDATE users SET name = ?, phone = ?, is_root = ? WHERE id = ?', [name, phone, isRoot, teacherId]);
+  await run('UPDATE users SET name = ?, first_name = ?, last_name = ?, phone = ?, is_root = ? WHERE id = ?', [name, first, last, phone, isRoot, teacherId]);
   res.json({ ok: true });
 }));
 
@@ -1244,9 +1270,10 @@ app.post('/api/signup/:token', h(async (req, res) => {
 
   const role = t.invite_role === 'teacher' ? 'teacher' : 'student';
   const isRoot = role === 'teacher' && t.is_root ? 1 : 0;
+  const { first: tFirst, last: tLast } = splitName(t.name);
   const newId = (await run(
-    'INSERT INTO users (role, name, email, phone, password_hash, is_root, access_until, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
-    [role, t.name, t.email, t.phone, hashPassword(password), isRoot, t.access_until || '', t.org_id || null]
+    'INSERT INTO users (role, name, first_name, last_name, email, phone, password_hash, is_root, access_until, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
+    [role, t.name, tFirst, tLast, t.email, t.phone, hashPassword(password), isRoot, t.access_until || '', t.org_id || null]
   )).rows[0].id;
   await run('UPDATE signup_tokens SET used = 1, student_id = ? WHERE id = ?', [newId, t.id]);
   await startSession(res, newId);
@@ -1550,15 +1577,15 @@ app.get('/api/support-agents', requireAdmin, h(async (req, res) => {
   res.json({ agents: rows });
 }));
 app.post('/api/support-agents', requireAdmin, h(async (req, res) => {
-  const name = (req.body.name || '').trim();
+  const { name, first, last } = nameParts(req.body);
   const email = (req.body.email || '').trim().toLowerCase();
   const password = req.body.password || '';
   if (!name || !email) return res.status(400).json({ error: 'Name and email are required.' });
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: 'Enter a valid email address.' });
   if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters.' });
   if (await get('SELECT id FROM users WHERE email = ?', [email])) return res.status(409).json({ error: 'A user with that email already exists.' });
-  const id = (await run("INSERT INTO users (role, name, email, password_hash) VALUES ('support', ?, ?, ?) RETURNING id",
-    [name, email, hashPassword(password)])).rows[0].id;
+  const id = (await run("INSERT INTO users (role, name, first_name, last_name, email, password_hash) VALUES ('support', ?, ?, ?, ?, ?) RETURNING id",
+    [name, first, last, email, hashPassword(password)])).rows[0].id;
   res.json({ id, name, email });
 }));
 
@@ -2518,8 +2545,9 @@ async function seedAdminFromEnv() {
   const password = process.env.ADMIN_PASSWORD || '';
   if (!email || !password) return;
   if (await get('SELECT id FROM users WHERE email = ?', [email])) return;
-  await run('INSERT INTO users (role, name, email, password_hash) VALUES (?, ?, ?, ?)', [
-    'admin', (process.env.ADMIN_NAME || 'Administrator').trim(), email, hashPassword(password),
+  const { name: an, first: af, last: al } = splitName((process.env.ADMIN_NAME || 'Administrator').trim());
+  await run('INSERT INTO users (role, name, first_name, last_name, email, password_hash) VALUES (?, ?, ?, ?, ?, ?)', [
+    'admin', an, af, al, email, hashPassword(password),
   ]);
   console.log('Seeded platform admin from environment:', email);
 }
