@@ -216,6 +216,9 @@ async function init() {
   // org membership. `disabled` is now per-membership (an org can disable a student
   // without affecting their other orgs). Backfill from the old global users.disabled.
   await pool.query('ALTER TABLE signup_tokens ADD COLUMN IF NOT EXISTS disabled INTEGER NOT NULL DEFAULT 0');
+  // Batch / course label (per org membership) so students can be grouped and a test
+  // assigned to a whole batch at once. Free text with client-side autocomplete.
+  await pool.query("ALTER TABLE signup_tokens ADD COLUMN IF NOT EXISTS batch TEXT NOT NULL DEFAULT ''");
   await pool.query(`UPDATE signup_tokens t SET disabled = 1
                       FROM users u
                      WHERE u.id = t.student_id AND u.disabled = 1 AND t.invite_role = 'student' AND t.disabled = 0`);

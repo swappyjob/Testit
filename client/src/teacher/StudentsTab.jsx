@@ -6,7 +6,11 @@ import { useConfirm } from '../confirm.jsx';
 export default function StudentsTab({ readOnly }) {
   const [students, setStudents] = useState(null);
   const [query, setQuery] = useState('');
-  const [form, setForm] = useState({ firstName: '', lastName: '', email: '', phone: '', accessUntil: '' });
+  const [batchFilter, setBatchFilter] = useState('');
+  const [batches, setBatches] = useState([]);
+  const [renaming, setRenaming] = useState(false);
+  const [renameTo, setRenameTo] = useState('');
+  const [form, setForm] = useState({ firstName: '', lastName: '', email: '', phone: '', batch: '', accessUntil: '' });
   const [msg, setMsg] = useState(null); // { text, ok }
   const [selectedId, setSelectedId] = useState(null); // signup-invite id (s.id)
   const [showAdd, setShowAdd] = useState(false);
@@ -14,17 +18,30 @@ export default function StudentsTab({ readOnly }) {
   const timer = useRef(null);
 
   const load = (q = query) => api('/api/students' + (q ? '?q=' + encodeURIComponent(q) : '')).then((d) => setStudents(d.students));
-  useEffect(() => { load(''); }, []);
+  const loadBatches = () => api('/api/batches').then((d) => setBatches(d.batches || [])).catch(() => {});
+  useEffect(() => { load(''); loadBatches(); }, []);
 
   function onSearch(v) { setQuery(v); clearTimeout(timer.current); timer.current = setTimeout(() => load(v), 250); }
 
   async function addStudent() {
     try {
       await api('/api/students', 'POST', form);
-      setForm({ firstName: '', lastName: '', email: '', phone: '', accessUntil: '' });
+      setForm({ firstName: '', lastName: '', email: '', phone: '', batch: '', accessUntil: '' });
       setQuery('');
       setMsg({ text: 'Student created! Click the student to open their page and copy the signup link.', ok: true });
-      load('');
+      load(''); loadBatches();
+    } catch (e) { setMsg({ text: e.message, ok: false }); }
+  }
+
+  async function renameBatch() {
+    const to = renameTo.trim();
+    try {
+      const r = await api('/api/batches/rename', 'POST', { from: batchFilter, to });
+      const existed = batches.includes(to);
+      setMsg({ text: `${existed && to ? 'Merged' : 'Renamed'} batch — ${r.updated} student(s) updated.`, ok: true });
+      setRenaming(false);
+      setBatchFilter(to);
+      load(''); loadBatches();
     } catch (e) { setMsg({ text: e.message, ok: false }); }
   }
 
@@ -48,8 +65,13 @@ export default function StudentsTab({ readOnly }) {
           <div><label>Last name</label><input type="text" value={form.lastName} onChange={(e) => setForm({ ...form, lastName: e.target.value })} /></div>
           <div><label>Student email</label><input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></div>
           <div><label>Phone number</label><input type="tel" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="e.g. +91 98765 43210" /></div>
+          <div>
+            <label>Batch (optional)</label>
+            <BatchSelect batches={batches} value={form.batch} onChange={(v) => setForm({ ...form, batch: v })} />
+          </div>
           <div><label>Access until (optional)</label><input type="date" value={form.accessUntil} onChange={(e) => setForm({ ...form, accessUntil: e.target.value })} /></div>
         </div>
+        <p className="muted" style={{ fontSize: 13, margin: '4px 0 0' }}>Group students into a batch/course (e.g. “Class 12 – JEE”) so you can assign a test to the whole batch at once. Pick an existing batch to avoid duplicates.</p>
         <p className="muted" style={{ fontSize: 13, margin: 0 }}>After this date the student loses access to your organization's tests (their access to any other institutes is unaffected). Leave blank for no end date.</p>
         <div style={{ marginTop: 16 }}><button className="btn" onClick={addStudent}>Create student &amp; get link</button></div>
       </div>
@@ -64,17 +86,37 @@ export default function StudentsTab({ readOnly }) {
             <a className="btn secondary small" href="/api/students/export.csv" download>⬇ Download CSV</a>
           </div>
         </div>
-        <input type="text" value={query} onChange={(e) => onSearch(e.target.value)} placeholder="🔍 Search by name or email..." style={{ margin: '14px 0' }} />
-        {students === null ? <p className="muted">Loading…</p> : students.length === 0 ? (
-          <p className="muted">{query ? `No students match “${query}”.` : 'No students yet.'}</p>
-        ) : (
+        <div className="row" style={{ gap: 10, margin: '14px 0', alignItems: 'center', flexWrap: 'wrap' }}>
+          <input type="text" value={query} onChange={(e) => onSearch(e.target.value)} placeholder="🔍 Search by name, email or batch..." style={{ margin: 0, flex: 1, minWidth: 200 }} />
+          {batches.length > 0 && (
+            <select value={batchFilter} onChange={(e) => { setBatchFilter(e.target.value); setRenaming(false); }} style={{ margin: 0, width: 'auto' }} title="Filter by batch">
+              <option value="">All batches</option>
+              {batches.map((b) => <option key={b} value={b}>{b}</option>)}
+            </select>
+          )}
+          {batchFilter && !readOnly && (renaming ? (
+            <>
+              <input type="text" autoFocus value={renameTo} onChange={(e) => setRenameTo(e.target.value)} placeholder="New batch name" style={{ margin: 0, width: 'auto' }} onKeyDown={(e) => { if (e.key === 'Enter') renameBatch(); }} />
+              <button className="btn small" onClick={renameBatch}>Save</button>
+              <button className="btn ghost small" onClick={() => setRenaming(false)}>✕</button>
+            </>
+          ) : (
+            <button className="btn secondary small" title="Rename or merge this batch (updates every student in it)" onClick={() => { setRenaming(true); setRenameTo(batchFilter); }}>✏ Rename batch</button>
+          ))}
+        </div>
+        {(() => {
+          const shown = students === null ? null : students.filter((s) => !batchFilter || s.batch === batchFilter);
+          if (shown === null) return <p className="muted">Loading…</p>;
+          if (shown.length === 0) return <p className="muted">{query || batchFilter ? 'No students match the current filter.' : 'No students yet.'}</p>;
+          return (
           <table>
-            <thead><tr><th>Name</th><th>Email</th><th>Mobile number</th><th>Access until</th><th>Status</th></tr></thead>
+            <thead><tr><th>Name</th><th>Email</th><th>Batch</th><th>Mobile number</th><th>Access until</th><th>Status</th></tr></thead>
             <tbody>
-              {students.map((s) => (
+              {shown.map((s) => (
                 <tr key={s.id} style={{ cursor: 'pointer' }} onClick={() => setSelectedId(s.id)}>
                   <td><a href="#" onClick={(e) => e.preventDefault()} style={{ fontWeight: 600 }}>{s.name}</a></td>
                   <td>{s.email}</td>
+                  <td>{s.batch ? <span className="pill">{s.batch}</span> : <span className="muted">—</span>}</td>
                   <td>{s.phone || <span className="muted">—</span>}</td>
                   <td>{s.accessUntil ? <span style={{ color: s.expired ? 'var(--red)' : undefined }}>{s.accessUntil}</span> : <span className="muted">—</span>}</td>
                   <td><StatusPill s={s} /></td>
@@ -82,17 +124,41 @@ export default function StudentsTab({ readOnly }) {
               ))}
             </tbody>
           </table>
-        )}
+          );
+        })()}
       </div>
 
-      {showImport && <BulkImport onClose={() => setShowImport(false)} onDone={() => { setShowImport(false); setQuery(''); load(''); }} />}
+      {showImport && <BulkImport onClose={() => setShowImport(false)} onDone={() => { setShowImport(false); setQuery(''); load(''); loadBatches(); }} />}
     </>
+  );
+}
+
+// Batch picker: a dropdown of the org's existing batches (typo-proof) plus an
+// explicit "Add a new batch…" option that reveals a text box. Value is the batch
+// string ('' = no batch).
+function BatchSelect({ batches, value, onChange }) {
+  // Start in "type" mode if the current value isn't one of the known batches.
+  const [adding, setAdding] = useState(!!value && !batches.includes(value));
+  if (adding) {
+    return (
+      <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+        <input type="text" autoFocus value={value} onChange={(e) => onChange(e.target.value)} placeholder="New batch name, e.g. Class 11 – NEET" style={{ flex: 1, margin: 0 }} />
+        <button type="button" className="btn ghost small" onClick={() => { setAdding(false); onChange(''); }}>↩ Pick from list</button>
+      </div>
+    );
+  }
+  return (
+    <select value={value} onChange={(e) => { if (e.target.value === '__new__') { setAdding(true); onChange(''); } else onChange(e.target.value); }} style={{ margin: 0 }}>
+      <option value="">— No batch —</option>
+      {batches.map((b) => <option key={b} value={b}>{b}</option>)}
+      <option value="__new__">➕ Add a new batch…</option>
+    </select>
   );
 }
 
 // --- Bulk CSV import -------------------------------------------------------
 const csvEsc = (v) => { const s = v == null ? '' : String(v); return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
-const TEMPLATE = 'data:text/csv;charset=utf-8,' + encodeURIComponent('Name,Email,Phone,Access Until\nAarav Sharma,aarav@example.com,9000000001,\nDiya Patel,diya@example.com,9000000002,2026-12-31\n');
+const TEMPLATE = 'data:text/csv;charset=utf-8,' + encodeURIComponent('Name,Email,Phone,Batch,Access Until\nAarav Sharma,aarav@example.com,9000000001,Class 11 – NEET,\nDiya Patel,diya@example.com,9000000002,Class 12 – JEE,2026-12-31\n');
 
 // Minimal CSV parser that respects quoted fields.
 function parseCSV(text) {
@@ -122,12 +188,21 @@ function BulkImport({ onClose, onDone }) {
     setFileName(file.name); setMsg(''); setResult(null);
     const reader = new FileReader();
     reader.onload = () => {
-      let grid = parseCSV(reader.result);
-      if (grid.length && grid[0].join(',').toLowerCase().includes('email')) grid = grid.slice(1); // drop header
-      const parsed = grid
-        .map((c) => ({ name: c[0] || '', email: c[1] || '', phone: c[2] || '', accessUntil: c[3] || '' }))
+      const grid = parseCSV(reader.result);
+      if (!grid.length) { setMsg('No rows found. Expected columns: Name, Email, Phone, Batch, Access until.'); setRows([]); return; }
+      // Header-aware column mapping so column order (and the new Batch column) is robust.
+      const header = grid[0].map((h) => h.toLowerCase().trim());
+      const hasHeader = header.some((h) => h.includes('email'));
+      const idx = (...names) => { for (const n of names) { const i = header.indexOf(n); if (i >= 0) return i; } return -1; };
+      const cols = hasHeader
+        ? { name: idx('name'), email: idx('email'), phone: idx('phone', 'mobile', 'mobile number'), batch: idx('batch', 'course', 'class'), accessUntil: idx('access until', 'access_until', 'accessuntil') }
+        : { name: 0, email: 1, phone: 2, batch: 3, accessUntil: 4 };
+      const g = (row, i) => (i >= 0 && row[i] != null ? row[i] : '');
+      const dataRows = hasHeader ? grid.slice(1) : grid;
+      const parsed = dataRows
+        .map((c) => ({ name: g(c, cols.name), email: g(c, cols.email), phone: g(c, cols.phone), batch: g(c, cols.batch), accessUntil: g(c, cols.accessUntil) }))
         .filter((r) => r.name || r.email || r.phone);
-      if (!parsed.length) setMsg('No rows found. Expected columns: Name, Email, Phone, Access until.');
+      if (!parsed.length) setMsg('No rows found. Expected columns: Name, Email, Phone, Batch, Access until.');
       setRows(parsed);
     };
     reader.onerror = () => setMsg('Could not read the file.');
@@ -154,7 +229,7 @@ function BulkImport({ onClose, onDone }) {
     <Modal title="Import students from CSV" onClose={onClose} wide>
       {!result ? (
         <>
-          <p className="muted">Upload a CSV with columns <b>Name, Email, Phone, Access until</b> (the last is optional; a header row is fine).</p>
+          <p className="muted">Upload a CSV with columns <b>Name, Email, Phone, Batch, Access until</b> (Batch &amp; Access until are optional; a header row is fine).</p>
           <p><a href={TEMPLATE} download="students-template.csv">⬇ Download a template</a></p>
           <input type="file" accept=".csv,text/csv" onChange={(e) => onFile(e.target.files[0])} />
           {rows && <p className="muted" style={{ marginTop: 8 }}>{fileName}: <b>{rows.length}</b> row(s) ready to import.</p>}
@@ -232,6 +307,7 @@ function StudentDetail({ student: s, onBack, onChanged, readOnly }) {
         <div className="grid two" style={{ marginTop: 16 }}>
           <Field label="Email">{s.email}</Field>
           <Field label="Mobile number">{s.phone || '—'}</Field>
+          <Field label="Batch">{s.batch ? <span className="pill">{s.batch}</span> : '—'}</Field>
           <Field label="Access until">{s.accessUntil ? <span style={{ color: s.expired ? 'var(--red)' : undefined }}>{s.accessUntil}{s.expired ? ' (expired)' : ''}</span> : 'No end date'}</Field>
           <Field label="Status"><StatusPill s={s} /></Field>
         </div>
@@ -269,12 +345,15 @@ function EditStudentModal({ student, onClose, onSaved }) {
   const [first, setFirst] = useState(student.firstName ?? nameFirst(student.name));
   const [last, setLast] = useState(student.lastName ?? nameLast(student.name));
   const [phone, setPhone] = useState(student.phone || '');
+  const [batch, setBatch] = useState(student.batch || '');
   const [accessUntil, setAccessUntil] = useState(student.accessUntil || '');
+  const [batches, setBatches] = useState([]);
   const [msg, setMsg] = useState('');
+  useEffect(() => { api('/api/batches').then((d) => setBatches(d.batches || [])).catch(() => {}); }, []);
   async function save() {
     try {
       const name = `${first.trim()} ${last.trim()}`.trim();
-      await api('/api/students/' + student.id, 'PUT', { name, firstName: first.trim(), lastName: last.trim(), phone, accessUntil });
+      await api('/api/students/' + student.id, 'PUT', { name, firstName: first.trim(), lastName: last.trim(), phone, batch: batch.trim(), accessUntil });
       onSaved();
     } catch (e) { setMsg(e.message); }
   }
@@ -287,6 +366,8 @@ function EditStudentModal({ student, onClose, onSaved }) {
       </div>
       <label>Email (cannot be changed)</label><input type="email" value={student.email} disabled />
       <label>Phone number</label><input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} />
+      <label>Batch (optional)</label>
+      <BatchSelect batches={batches} value={batch} onChange={setBatch} />
       <label>Access until (optional)</label><input type="date" value={accessUntil} onChange={(e) => setAccessUntil(e.target.value)} />
       <div className="row" style={{ marginTop: 18 }}>
         <button className="btn" onClick={save}>Save changes</button>

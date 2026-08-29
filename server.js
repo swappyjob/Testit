@@ -434,6 +434,7 @@ app.post('/api/students', requireAuth('teacher'), requireActiveSubscription, h(a
   const { name } = nameParts(req.body);
   const email = (req.body.email || '').trim().toLowerCase();
   const phone = (req.body.phone || '').trim();
+  const batch = (req.body.batch || '').trim();
   const accessUntil = readAccessUntil(req.body);
   if (!name || !email) return res.status(400).json({ error: 'Student name and email are required.' });
   if (!phone) return res.status(400).json({ error: 'Student phone number is required.' });
@@ -460,8 +461,8 @@ app.post('/api/students', requireAuth('teacher'), requireActiveSubscription, h(a
 
   const token = randomToken();
   await run(
-    'INSERT INTO signup_tokens (token, name, email, phone, access_until, org_id, teacher_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    [token, name, email, phone, accessUntil, req.user.org_id, req.user.id]
+    'INSERT INTO signup_tokens (token, name, email, phone, batch, access_until, org_id, teacher_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    [token, name, email, phone, batch, accessUntil, req.user.org_id, req.user.id]
   );
   await logAudit(req, { action: 'student.create', entityType: 'student', entityLabel: name, details: email });
   res.json({ token, signupPath: `/signup?token=${token}` });
@@ -484,6 +485,7 @@ app.post('/api/students/bulk', requireAuth('teacher'), requireActiveSubscription
     const name = (rows[i].name || '').trim();
     const email = (rows[i].email || '').trim().toLowerCase();
     const phone = (rows[i].phone || '').trim();
+    const batch = (rows[i].batch || '').trim();
     const accessUntil = readAccessUntil(rows[i]);
     const label = name || email || `Row ${i + 1}`;
     if (!name || !email) { skipped.push({ label, reason: 'Name and email are required' }); continue; }
@@ -494,8 +496,8 @@ app.post('/api/students/bulk', requireAuth('teacher'), requireActiveSubscription
     if (await get("SELECT id FROM users WHERE email = ? AND role IN ('teacher','admin')", [email])) { skipped.push({ label, reason: 'Email belongs to a teacher/admin account' }); continue; }
     if (await get("SELECT id FROM signup_tokens WHERE email = ? AND org_id = ? AND invite_role = 'student'", [email, req.user.org_id])) { skipped.push({ label, reason: 'Already in your organization' }); continue; }
     const token = randomToken();
-    await run('INSERT INTO signup_tokens (token, name, email, phone, access_until, org_id, teacher_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [token, name, email, phone, accessUntil, req.user.org_id, req.user.id]);
+    await run('INSERT INTO signup_tokens (token, name, email, phone, batch, access_until, org_id, teacher_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [token, name, email, phone, batch, accessUntil, req.user.org_id, req.user.id]);
     seen.add(email);
     used += 1;
     created.push({ name, email, signupPath: `/signup?token=${token}` });
@@ -509,7 +511,7 @@ app.get('/api/students', requireAuth('teacher'), h(async (req, res) => {
   const q = (req.query.q || '').trim();
   // Students belong to the organization, so every teacher in the org sees them all.
   const base =
-    `SELECT t.id AS token_id, t.name, t.email, t.phone, t.access_until, t.token, t.used, t.student_id, t.disabled
+    `SELECT t.id AS token_id, t.name, t.email, t.phone, t.batch, t.access_until, t.token, t.used, t.student_id, t.disabled
        FROM signup_tokens t
       WHERE t.org_id = ? AND t.invite_role = 'student'`;
   let invites;
@@ -517,8 +519,8 @@ app.get('/api/students', requireAuth('teacher'), h(async (req, res) => {
     // Escape LIKE wildcards so the user's text is matched literally. ILIKE = case-insensitive.
     const like = '%' + q.replace(/[\\%_]/g, '\\$&') + '%';
     invites = await all(
-      `${base} AND (t.name ILIKE ? ESCAPE '\\' OR t.email ILIKE ? ESCAPE '\\') ORDER BY t.created_at DESC`,
-      [req.user.org_id, like, like]
+      `${base} AND (t.name ILIKE ? ESCAPE '\\' OR t.email ILIKE ? ESCAPE '\\' OR t.batch ILIKE ? ESCAPE '\\') ORDER BY t.created_at DESC`,
+      [req.user.org_id, like, like, like]
     );
   } else {
     invites = await all(`${base} ORDER BY t.created_at DESC`, [req.user.org_id]);
@@ -528,6 +530,7 @@ app.get('/api/students', requireAuth('teacher'), h(async (req, res) => {
     name: i.name,
     email: i.email,
     phone: i.phone,
+    batch: i.batch || '',
     accessUntil: i.access_until,
     expired: !!i.access_until && isExpired(i.access_until),
     signedUp: !!i.used,
@@ -538,10 +541,34 @@ app.get('/api/students', requireAuth('teacher'), h(async (req, res) => {
   res.json({ students });
 }));
 
+// Distinct batch labels in the organization (for the batch picker + assign-by-batch).
+app.get('/api/batches', requireAuth('teacher'), h(async (req, res) => {
+  const rows = await all(
+    "SELECT DISTINCT btrim(batch) AS batch FROM signup_tokens WHERE org_id = ? AND invite_role = 'student' AND btrim(batch) <> '' ORDER BY batch",
+    [req.user.org_id]
+  );
+  res.json({ batches: rows.map((r) => r.batch) });
+}));
+
+// Rename a batch across the whole organization (fixes typos; renaming to an
+// existing batch name merges them). `to` may be blank to clear the label.
+app.post('/api/batches/rename', requireAuth('teacher'), requireActiveSubscription, h(async (req, res) => {
+  const from = (req.body.from || '').trim();
+  const to = (req.body.to || '').trim();
+  if (!from) return res.status(400).json({ error: 'Choose a batch to rename.' });
+  if (to === from) return res.json({ ok: true, updated: 0 });
+  const r = await run(
+    "UPDATE signup_tokens SET batch = ? WHERE org_id = ? AND invite_role = 'student' AND btrim(batch) = ?",
+    [to, req.user.org_id, from]
+  );
+  await logAudit(req, { action: 'student.create', entityType: 'student', entityLabel: `Batch “${from}” → “${to || '(none)'}”`, details: `${r.changes || 0} student(s) re-batched` });
+  res.json({ ok: true, updated: r.changes || 0 });
+}));
+
 // Download all of this teacher's students as a CSV file.
 app.get('/api/students/export.csv', requireAuth('teacher'), h(async (req, res) => {
   const rows = await all(
-    `SELECT t.name, t.email, t.phone, t.access_until, t.used, t.disabled,
+    `SELECT t.name, t.email, t.phone, t.batch, t.access_until, t.used, t.disabled,
             to_char(t.created_at, 'YYYY-MM-DD HH24:MI') AS created_at
        FROM signup_tokens t
       WHERE t.org_id = ? AND t.invite_role = 'student' ORDER BY t.created_at DESC`,
@@ -552,12 +579,12 @@ app.get('/api/students/export.csv', requireAuth('teacher'), h(async (req, res) =
     const s = v == null ? '' : String(v);
     return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
   };
-  const header = ['Name', 'Email', 'Mobile Number', 'Access Until', 'Signup Status', 'Account Status', 'Added On'];
+  const header = ['Name', 'Email', 'Mobile Number', 'Batch', 'Access Until', 'Signup Status', 'Account Status', 'Added On'];
   const lines = [header.join(',')];
   for (const r of rows) {
     const signup = r.used ? 'Signed up' : 'Invite pending';
     const account = !r.used ? '' : (r.disabled ? 'Disabled' : (isExpired(r.access_until) ? 'Expired' : 'Active'));
-    lines.push([r.name, r.email, r.phone, r.access_until, signup, account, r.created_at].map(esc).join(','));
+    lines.push([r.name, r.email, r.phone, r.batch, r.access_until, signup, account, r.created_at].map(esc).join(','));
   }
   const csv = '﻿' + lines.join('\r\n');
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
@@ -593,16 +620,17 @@ app.put('/api/students/:id', requireAuth('teacher'), requireActiveSubscription, 
   if (!tok) return res.status(404).json({ error: 'Student not found.' });
   const { name, first, last } = nameParts(req.body);
   const phone = (req.body.phone || '').trim();
+  const batch = (req.body.batch || '').trim();
   const accessUntil = readAccessUntil(req.body);
   if (!name) return res.status(400).json({ error: 'Student name is required.' });
   if (!phone) return res.status(400).json({ error: 'Student phone number is required.' });
   if (!/^[\d+()\-\s]{6,20}$/.test(phone))
     return res.status(400).json({ error: 'Please enter a valid phone number.' });
 
-  // access_until is per-organization (on the membership); name/phone are the
-  // shared profile, kept in sync so assignment lists show the right name.
-  await run('UPDATE signup_tokens SET name = ?, phone = ?, access_until = ? WHERE id = ?',
-    [name, phone, accessUntil, tok.id]);
+  // access_until + batch are per-organization (on the membership); name/phone are
+  // the shared profile, kept in sync so assignment lists show the right name.
+  await run('UPDATE signup_tokens SET name = ?, phone = ?, batch = ?, access_until = ? WHERE id = ?',
+    [name, phone, batch, accessUntil, tok.id]);
   if (tok.student_id) {
     await run('UPDATE users SET name = ?, first_name = ?, last_name = ?, phone = ? WHERE id = ?', [name, first, last, phone, tok.student_id]);
   }
@@ -1911,9 +1939,20 @@ app.delete('/api/drafts/:id', requireAuth('teacher'), h(async (req, res) => {
 // ============================================================================
 app.post('/api/assignments', requireAuth('teacher'), requireActiveSubscription, h(async (req, res) => {
   const testId = Number(req.body.test_id);
-  const studentIds = Array.isArray(req.body.student_ids) ? req.body.student_ids.map(Number) : [];
+  const ids = new Set(Array.isArray(req.body.student_ids) ? req.body.student_ids.map(Number) : []);
   const test = await get('SELECT * FROM tests WHERE id = ? AND teacher_id = ?', [testId, req.user.id]);
   if (!test) return res.status(404).json({ error: 'Test not found.' });
+  // Optionally assign a whole batch: add every signed-up, enabled student in it.
+  const batch = (req.body.batch || '').trim();
+  if (batch) {
+    const inBatch = await all(
+      `SELECT st.student_id FROM signup_tokens st
+        WHERE st.org_id = ? AND st.invite_role = 'student' AND st.used = 1 AND st.disabled = 0 AND btrim(st.batch) = ?`,
+      [req.user.org_id, batch]
+    );
+    for (const r of inBatch) if (r.student_id) ids.add(Number(r.student_id));
+  }
+  const studentIds = [...ids];
   if (studentIds.length === 0) return res.status(400).json({ error: 'Select at least one student.' });
 
   let added = 0;

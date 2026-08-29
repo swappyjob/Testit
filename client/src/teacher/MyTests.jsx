@@ -113,6 +113,7 @@ function AssignPanel({ test, onChanged }) {
   const [assigned, setAssigned] = useState(new Set());
   const [assignedRows, setAssignedRows] = useState([]);
   const [checked, setChecked] = useState(new Set());
+  const [batchSel, setBatchSel] = useState(''); // '' = all batches
   const [msg, setMsg] = useState('');
 
   const reloadAssigned = () => api('/api/tests/' + test.id + '/assignments').then((a) => {
@@ -142,8 +143,19 @@ function AssignPanel({ test, onChanged }) {
     await reloadAssigned();
     onChanged?.();
   }
+  // Assign every signed-up student in a batch, in one click.
+  async function assignBatch() {
+    if (!batchSel) { setMsg('Choose a batch first.'); return; }
+    const r = await api('/api/assignments', 'POST', { test_id: test.id, batch: batchSel });
+    setMsg(r.assigned > 0 ? `Assigned the “${batchSel}” batch — ${r.assigned} newly assigned.` : `Everyone in “${batchSel}” was already assigned.`);
+    setChecked(new Set());
+    await reloadAssigned();
+    onChanged?.();
+  }
 
-  const assignable = students ? students.filter((s) => !assigned.has(s.studentId)) : [];
+  const batchList = students ? [...new Set(students.map((s) => s.batch).filter(Boolean))].sort() : [];
+  const shown = students ? students.filter((s) => !batchSel || s.batch === batchSel) : [];
+  const assignable = shown.filter((s) => !assigned.has(s.studentId));
   const allSelected = assignable.length > 0 && assignable.every((s) => checked.has(s.studentId));
 
   return (
@@ -153,7 +165,19 @@ function AssignPanel({ test, onChanged }) {
         <p className="muted">No students have signed up yet. Add students under the Students tab first.</p>
       ) : (
         <>
-          <p className="muted">Tick the students who should take this test.</p>
+          {batchList.length > 0 && (
+            <div className="row" style={{ gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12, padding: '10px 12px', background: 'var(--surface-2, #f1f5f9)', borderRadius: 10 }}>
+              <span style={{ fontWeight: 600 }}>Batch:</span>
+              <select value={batchSel} onChange={(e) => { setBatchSel(e.target.value); setChecked(new Set()); }} style={{ margin: 0, width: 'auto' }}>
+                <option value="">All batches</option>
+                {batchList.map((b) => <option key={b} value={b}>{b}</option>)}
+              </select>
+              {batchSel
+                ? <button className="btn small" onClick={assignBatch}>Assign the whole “{batchSel}” batch</button>
+                : <span className="muted" style={{ fontSize: 13 }}>Pick a batch to filter the list, or assign everyone in it at once.</span>}
+            </div>
+          )}
+          <p className="muted">Tick the students who should take this test{batchSel ? ` (showing batch “${batchSel}”)` : ''}.</p>
           {assignable.length > 0 && (
             <label className="choice" style={{ fontWeight: 600, borderBottom: '1px solid var(--line)', borderRadius: 0 }}>
               <input type="checkbox" checked={allSelected}
@@ -161,12 +185,13 @@ function AssignPanel({ test, onChanged }) {
               Select all ({assignable.length})
             </label>
           )}
-          {students.map((s) => {
+          {shown.map((s) => {
             const done = assigned.has(s.studentId);
             return (
               <label className="choice" key={s.studentId}>
                 <input type="checkbox" disabled={done} checked={done || checked.has(s.studentId)} onChange={() => toggle(s.studentId)} />
                 {s.name} <span className="muted">({s.email})</span>
+                {s.batch && <span className="pill" style={{ marginLeft: 6 }}>{s.batch}</span>}
                 {done && <span className="pill green">already assigned</span>}
               </label>
             );
