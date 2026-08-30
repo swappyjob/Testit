@@ -1,10 +1,13 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, lazy, Suspense } from 'react';
 import { api } from '../api.js';
 import { Msg, DateTime12, InfoTip } from '../components.jsx';
 import { useAlert } from '../confirm.jsx';
 import { BankPicker } from './QuestionBank.jsx';
 import { MathText } from '../mathText.jsx';
 import DrawingPad from './DrawingPad.jsx';
+// Ketcher (chemistry editor) is huge (~WASM), so load it on demand only when a
+// teacher opens the structure editor — it must never weigh down the student bundle.
+const KetcherModal = lazy(() => import('./KetcherModal.jsx'));
 import RichMathInput from './RichMathInput.jsx';
 
 const TYPE_LABEL = { mcq: 'Single choice', multi: 'Multiple answers', truefalse: 'True / False', short: 'Short answer' };
@@ -49,6 +52,7 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
   const [showBank, setShowBank] = useState(false);
   const [bankMsg, setBankMsg] = useState('');
   const [showDraw, setShowDraw] = useState(false);
+  const [showChem, setShowChem] = useState(false);
   const savingRef = useRef(false);
   const lastSnapRef = useRef(null);
 
@@ -414,11 +418,15 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
               <img src={q.image} alt="" style={{ maxWidth: 240, maxHeight: 180, border: '1px solid var(--line)', borderRadius: 8, display: 'block' }} />
               <div className="row" style={{ gap: 8, marginTop: 6 }}>
                 <button className="btn ghost small" onClick={() => setShowDraw(true)}>✏️ Edit drawing</button>
+                <button className="btn ghost small" onClick={() => setShowChem(true)}>🧪 Chemistry structure</button>
                 <button className="btn danger small" onClick={() => updateQ(qIndex, { image: '' })}>Remove</button>
               </div>
             </div>
           ) : (
-            <button className="btn secondary small" type="button" onClick={() => setShowDraw(true)}>✏️ Draw a diagram</button>
+            <div className="row" style={{ gap: 8 }}>
+              <button className="btn secondary small" type="button" onClick={() => setShowDraw(true)}>✏️ Draw a diagram</button>
+              <button className="btn secondary small" type="button" onClick={() => setShowChem(true)}>🧪 Chemistry structure</button>
+            </div>
           )}
 
           {sections.length > 0 && (
@@ -545,6 +553,11 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
 
       {showBank && <BankPicker onClose={() => setShowBank(false)} onAdd={addFromBank} />}
       {showDraw && q && <DrawingPad initial={q.image || null} onClose={() => setShowDraw(false)} onSave={saveDrawing} />}
+      {showChem && q && (
+        <Suspense fallback={null}>
+          <KetcherModal onClose={() => setShowChem(false)} onInsert={(url) => { updateQ(qIndex, { image: url }); setShowChem(false); }} />
+        </Suspense>
+      )}
     </div>
   );
 }

@@ -6,6 +6,11 @@ import react from '@vitejs/plugin-react';
 // serves directly.
 export default defineConfig({
   plugins: [react()],
+  // Ketcher's bundled chemistry engine references the Node global `global`; map it
+  // to the browser's globalThis so it runs client-side.
+  define: {
+    global: 'globalThis',
+  },
   server: {
     port: 5173,
     proxy: {
