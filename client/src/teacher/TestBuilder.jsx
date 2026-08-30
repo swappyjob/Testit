@@ -53,6 +53,7 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
   const [bankMsg, setBankMsg] = useState('');
   const [showDraw, setShowDraw] = useState(false);
   const [showChem, setShowChem] = useState(false);
+  const imgFileRef = useRef(null);
   const savingRef = useRef(false);
   const lastSnapRef = useRef(null);
 
@@ -184,6 +185,21 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
   async function saveDrawing(dataUrl) {
     setShowDraw(false);
     try {
+      const { url } = await api('/api/upload', 'POST', { dataUrl });
+      updateQ(qIndex, { image: url });
+    } catch (e) { alert(e.message); }
+  }
+  // Upload an image file (max 2 MB) chosen by the teacher and attach it as the
+  // question diagram. The server independently re-validates size + real image type.
+  const IMG_MAX = 2 * 1024 * 1024;
+  const IMG_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+  async function uploadImageFile(file) {
+    if (imgFileRef.current) imgFileRef.current.value = ''; // allow re-picking the same file
+    if (!file) return;
+    if (!IMG_TYPES.includes(file.type)) { alert('Please choose a PNG, JPG, GIF, or WebP image.'); return; }
+    if (file.size > IMG_MAX) { alert('Image must be 2 MB or smaller. Please pick a smaller file.'); return; }
+    try {
+      const dataUrl = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(file); });
       const { url } = await api('/api/upload', 'POST', { dataUrl });
       updateQ(qIndex, { image: url });
     } catch (e) { alert(e.message); }
@@ -413,21 +429,25 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
             placeholder="Type the question. For any maths, click ➕ Insert equation." />
 
           <label>Diagram (optional)</label>
+          <input ref={imgFileRef} type="file" accept="image/png,image/jpeg,image/gif,image/webp" style={{ display: 'none' }} onChange={(e) => uploadImageFile(e.target.files[0])} />
           {q.image ? (
             <div style={{ marginTop: 8 }}>
               <img src={q.image} alt="" style={{ maxWidth: 240, maxHeight: 180, border: '1px solid var(--line)', borderRadius: 8, display: 'block' }} />
-              <div className="row" style={{ gap: 8, marginTop: 6 }}>
+              <div className="row" style={{ gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
+                <button className="btn ghost small" type="button" onClick={() => imgFileRef.current && imgFileRef.current.click()}>⬆ Upload image</button>
                 <button className="btn ghost small" onClick={() => setShowDraw(true)}>✏️ Edit drawing</button>
                 <button className="btn ghost small" onClick={() => setShowChem(true)}>🧪 Chemistry structure</button>
                 <button className="btn danger small" onClick={() => updateQ(qIndex, { image: '' })}>Remove</button>
               </div>
             </div>
           ) : (
-            <div className="row" style={{ gap: 8 }}>
+            <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+              <button className="btn secondary small" type="button" onClick={() => imgFileRef.current && imgFileRef.current.click()}>⬆ Upload image</button>
               <button className="btn secondary small" type="button" onClick={() => setShowDraw(true)}>✏️ Draw a diagram</button>
               <button className="btn secondary small" type="button" onClick={() => setShowChem(true)}>🧪 Chemistry structure</button>
             </div>
           )}
+          <p className="muted" style={{ fontSize: 12, margin: '4px 0 0' }}>Upload a PNG/JPG/GIF/WebP (max 2 MB), draw a diagram, or build a chemistry structure.</p>
 
           {sections.length > 0 && (
             <>

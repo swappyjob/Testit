@@ -41,12 +41,29 @@ const imgRes = await fetch(BASE + url);
 if (!imgRes.ok) throw new Error('uploaded image not served: ' + imgRes.status);
 ok('uploaded image is publicly served');
 
-// Reject a non-image upload
+// Reject a non-image upload (disallowed MIME)
 let rejected = false;
 try { await call(teacher, '/api/upload', 'POST', { dataUrl: 'data:text/plain;base64,aGVsbG8=' }); }
 catch { rejected = true; }
 if (!rejected) throw new Error('non-image upload was NOT rejected');
-ok('non-image upload rejected');
+ok('non-image upload rejected (disallowed MIME)');
+
+// A file that CLAIMS to be a PNG but whose bytes are NOT an image is rejected —
+// the server validates the real magic bytes, never the client's declared MIME.
+{
+  const fake = 'data:image/png;base64,' + Buffer.from('this is definitely not a real image file, just text').toString('base64');
+  const r = await fetch(BASE + '/api/upload', { method: 'POST', headers: { 'content-type': 'application/json', cookie: teacher.header() }, body: JSON.stringify({ dataUrl: fake }) });
+  if (r.status !== 400) throw new Error('a fake image (image/png header, non-image bytes) must be rejected with 400, got ' + r.status);
+  ok('a file claiming to be a PNG but with non-image bytes is rejected (magic-byte check)');
+}
+
+// An image over 2 MB is rejected.
+{
+  const big = 'data:image/png;base64,' + Buffer.alloc(2200000, 1).toString('base64');
+  const r = await fetch(BASE + '/api/upload', { method: 'POST', headers: { 'content-type': 'application/json', cookie: teacher.header() }, body: JSON.stringify({ dataUrl: big }) });
+  if (r.status !== 413) throw new Error('an image over 2 MB must be rejected with 413, got ' + r.status);
+  ok('an image larger than 2 MB is rejected (413)');
+}
 
 // Create a test with an image on the question
 const { id: testId } = await call(teacher, '/api/tests', 'POST', {

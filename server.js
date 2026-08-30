@@ -1619,20 +1619,36 @@ app.post('/api/support-agents', requireAdmin, h(async (req, res) => {
 
 // Save a base64 data URL as an image file. Returns { url } or { status, error }.
 const IMAGE_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
+// Verify a buffer is GENUINELY an image by its magic bytes — never trust the
+// client's declared MIME type. Returns the real extension, or null if it isn't
+// one of the supported image formats.
+function sniffImageType(buf) {
+  if (!buf || buf.length < 12) return null;
+  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return 'png';           // \x89PNG
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'jpg';                              // JPEG SOI
+  if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x38) return 'gif';           // GIF8
+  if (buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46 &&                        // RIFF....
+      buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50) return 'webp';         // WEBP
+  return null;
+}
 function saveDataUrlImage(dataUrl, maxBytes) {
   const m = /^data:([^;]+);base64,(.+)$/s.exec(dataUrl || '');
   if (!m) return { status: 400, error: 'Invalid image data.' };
-  const ext = IMAGE_EXT[m[1].toLowerCase()];
-  if (!ext) return { status: 400, error: 'Only PNG, JPG, GIF, or WebP images are allowed.' };
+  if (!IMAGE_EXT[m[1].toLowerCase()]) return { status: 400, error: 'Only PNG, JPG, GIF, or WebP images are allowed.' };
   const buf = Buffer.from(m[2], 'base64');
   if (buf.length > maxBytes) return { status: 413, error: `Image must be ${Math.round(maxBytes / (1024 * 1024))} MB or smaller.` };
+  // Authoritative check: the bytes themselves must be a real image, regardless of
+  // the declared MIME. The stored extension comes from the sniffed type.
+  const ext = sniffImageType(buf);
+  if (!ext) return { status: 400, error: 'That file is not a valid image (PNG, JPG, GIF, or WebP).' };
   const name = crypto.randomBytes(16).toString('hex') + '.' + ext;
   fs.writeFileSync(path.join(UPLOAD_DIR, name), buf);
   return { url: '/uploads/' + name };
 }
 
+// Question-image upload: capped at 2 MB and validated as a genuine image.
 app.post('/api/upload', requireAuth('teacher'), requireActiveSubscription, (req, res) => {
-  const r = saveDataUrlImage(req.body.dataUrl, 5 * 1024 * 1024);
+  const r = saveDataUrlImage(req.body.dataUrl, 2 * 1024 * 1024);
   if (r.error) return res.status(r.status).json({ error: r.error });
   res.json({ url: r.url });
 });
