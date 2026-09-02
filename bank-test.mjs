@@ -70,6 +70,26 @@ if ((await call(t1, '/api/bank', 'POST', { type: 'mcq', prompt: '', options: ['a
   throw new Error('a question without text should be 400');
 ok('invalid questions are rejected (400)');
 
+// Bulk import: valid rows created, invalid rows skipped with a reason.
+const bulk = await call(t1, '/api/bank/bulk', 'POST', { questions: [
+  { type: 'mcq', prompt: 'CSV single: 2+2?', options: ['3', '4'], correct: 1, points: 4, topic: 'Maths' },
+  { type: 'multi', prompt: 'CSV multi: which are prime?', options: ['2', '3', '4'], correct: [0, 1], points: 4 },
+  { type: 'truefalse', prompt: 'CSV tf: the sky is blue', correct: 'true', points: 1 },
+  { type: 'mcq', prompt: '', options: ['a', 'b'], correct: 0 },              // invalid: no text
+  { type: 'mcq', prompt: 'bad correct index', options: ['a', 'b'], correct: 5 }, // invalid: index out of range
+]});
+if (bulk.data.created !== 3) throw new Error('bulk should create the 3 valid questions, got ' + bulk.data.created);
+if (bulk.data.skipped.length !== 2) throw new Error('bulk should skip the 2 invalid rows, got ' + JSON.stringify(bulk.data.skipped));
+if (!bulk.data.skipped.every((s) => s.reason)) throw new Error('every skipped row should carry a reason');
+const found = (await call(t1, '/api/bank?q=' + encodeURIComponent('CSV multi'))).data.questions;
+if (!found.some((q) => /CSV multi/.test(q.prompt))) throw new Error('an imported question should be retrievable from the bank');
+ok('bulk CSV import creates valid questions and skips invalid ones with reasons');
+
+// An empty import is rejected.
+if ((await call(t1, '/api/bank/bulk', 'POST', { questions: [] }, false)).status !== 400)
+  throw new Error('an empty import should be rejected (400)');
+ok('an empty bulk import is rejected (400)');
+
 // Delete.
 await call(t1, '/api/bank/' + id, 'DELETE');
 if ((await listIds(t1)).includes(id)) throw new Error('deleted question should be gone');

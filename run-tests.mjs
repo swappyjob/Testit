@@ -17,7 +17,7 @@ const env = { ...process.env, PGDATABASE: 'testit_test', PGPASSWORD, PORT: Strin
 const uploadsDir = path.join(__dirname, 'public', 'uploads');
 const listUploads = () => { try { return new Set(fs.readdirSync(uploadsDir)); } catch { return new Set(); } };
 
-const ALL_SUITES = ['admin', 'teachers', 'e2e', 'edit', 'phone', 'search', 'disable', 'access', 'student-edit', 'export', 'password', 'reset', 'deadline', 'timer', 'image', 'negmark', 'multi', 'section', 'subscription', 'proctor', 'student-review', 'draft', 'resume', 'leaderboard', 'bank', 'audit', 'mathdraw', 'multiorg', 'support', 'bulkstudents', 'summary', 'slots', 'rank', 'plans', 'profile', 'batch'];
+const ALL_SUITES = ['admin', 'teachers', 'e2e', 'edit', 'phone', 'search', 'disable', 'access', 'student-edit', 'export', 'password', 'reset', 'deadline', 'timer', 'image', 'negmark', 'multi', 'section', 'subscription', 'proctor', 'student-review', 'draft', 'resume', 'leaderboard', 'bank', 'audit', 'mathdraw', 'multiorg', 'support', 'bulkstudents', 'summary', 'slots', 'rank', 'plans', 'profile', 'batch', 'shuffle'];
 // Optionally run a subset: `node run-tests.mjs slots multiorg`.
 const only = process.argv.slice(2).filter((a) => !a.startsWith('-'));
 const SUITES = only.length ? ALL_SUITES.filter((s) => only.includes(s)) : ALL_SUITES;

@@ -208,6 +208,11 @@ async function init() {
   // disconnect. Cleared/ignored once the attempt is submitted.
   await pool.query("ALTER TABLE attempts ADD COLUMN IF NOT EXISTS draft_answers TEXT NOT NULL DEFAULT ''");
   await pool.query('ALTER TABLE attempts ADD COLUMN IF NOT EXISTS current_index INTEGER NOT NULL DEFAULT 0');
+  // Per-student question order, frozen when the attempt starts so the layout is
+  // stable across reloads/resume. Answers are keyed by question id, so shuffling
+  // the order never affects grading.
+  await pool.query("ALTER TABLE attempts ADD COLUMN IF NOT EXISTS shuffle TEXT NOT NULL DEFAULT ''");
+  await pool.query('ALTER TABLE tests ADD COLUMN IF NOT EXISTS shuffle_questions INTEGER NOT NULL DEFAULT 0');
   await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS access_until TEXT NOT NULL DEFAULT ''");
   await pool.query("ALTER TABLE signup_tokens ADD COLUMN IF NOT EXISTS access_until TEXT NOT NULL DEFAULT ''");
   await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS org_id INTEGER REFERENCES organizations(id) ON DELETE SET NULL');

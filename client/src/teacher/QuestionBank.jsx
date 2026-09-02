@@ -53,6 +53,7 @@ export default function QuestionBank({ readOnly }) {
   const [filters, setFilters] = useState({ q: '', topic: '', type: '' });
   const [data, load] = useBank(filters);
   const [editing, setEditing] = useState(null); // editable question (+id) or { isNew:true }
+  const [showImport, setShowImport] = useState(false);
   const [msg, setMsg] = useState(null);
 
   async function del(qid) {
@@ -65,7 +66,12 @@ export default function QuestionBank({ readOnly }) {
       <div className="card">
         <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
           <h1 style={{ margin: 0 }}>📚 Question Bank</h1>
-          {!readOnly && <button className="btn" onClick={() => setEditing({ isNew: true })}>➕ Add question</button>}
+          {!readOnly && (
+            <div className="row" style={{ gap: 8 }}>
+              <button className="btn secondary small" onClick={() => setShowImport(true)}>⬆ Import CSV</button>
+              <button className="btn" onClick={() => setEditing({ isNew: true })}>➕ Add question</button>
+            </div>
+          )}
         </div>
         <p className="muted">Reusable questions shared across your organization. Pull them into any test from the test builder.</p>
         {msg && <Msg text={msg.text} kind={msg.ok ? 'ok' : 'error'} />}
@@ -104,7 +110,133 @@ export default function QuestionBank({ readOnly }) {
           onClose={() => setEditing(null)}
           onSaved={(text) => { setEditing(null); setMsg({ ok: true, text }); load(); }} />
       )}
+      {showImport && (
+        <BankImport onClose={() => setShowImport(false)}
+          onDone={(r) => { setShowImport(false); setMsg({ ok: true, text: `Imported ${r.created} question(s)${r.skipped.length ? `, skipped ${r.skipped.length}` : ''}.` }); load(); }} />
+      )}
     </>
+  );
+}
+
+// --- Bulk CSV import -------------------------------------------------------
+const csvEsc = (v) => { const s = v == null ? '' : String(v); return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+function parseCSV(text) {
+  return String(text).split(/\r?\n/).filter((l) => l.trim() !== '').map((line) => {
+    const cells = []; let cur = '', q = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (q) { if (ch === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else q = false; } else cur += ch; }
+      else if (ch === '"') q = true;
+      else if (ch === ',') { cells.push(cur); cur = ''; }
+      else cur += ch;
+    }
+    cells.push(cur);
+    return cells.map((c) => c.trim());
+  });
+}
+const typeAlias = (t) => {
+  const s = String(t || '').trim().toLowerCase();
+  if (/^(mcq|single|one correct)/.test(s)) return 'mcq';
+  if (/^(multi|multiple)/.test(s)) return 'multi';
+  if (/^(tf|true)/.test(s)) return 'truefalse';
+  if (/^(short|subjective|numeric)/.test(s)) return 'short';
+  return '';
+};
+const TEMPLATE_ROWS = [
+  ['Type', 'Question', 'Option A', 'Option B', 'Option C', 'Option D', 'Correct', 'Points', 'Topic', 'Difficulty', 'Explanation'],
+  ['mcq', 'What is $2+2$?', '3', '4', '5', '6', 'B', '4', 'Arithmetic', 'Easy', '$2+2=4$'],
+  ['multi', 'Which of these are prime?', '2', '3', '4', '5', 'A,B,D', '4', 'Numbers', 'Medium', ''],
+  ['truefalse', 'The earth is flat.', '', '', '', '', 'False', '1', 'GK', 'Easy', ''],
+  ['short', "State Newton's second law.", '', '', '', '', '', '4', 'Mechanics', 'Medium', ''],
+];
+const BANK_TEMPLATE = 'data:text/csv;charset=utf-8,' + encodeURIComponent(TEMPLATE_ROWS.map((r) => r.map(csvEsc).join(',')).join('\n') + '\n');
+
+function BankImport({ onClose, onDone }) {
+  const [rows, setRows] = useState(null);
+  const [fileName, setFileName] = useState('');
+  const [result, setResult] = useState(null);
+  const [msg, setMsg] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  function onFile(file) {
+    if (!file) return;
+    setFileName(file.name); setMsg(''); setResult(null);
+    const reader = new FileReader();
+    reader.onload = () => {
+      const grid = parseCSV(reader.result);
+      if (!grid.length) { setMsg('The file is empty.'); setRows([]); return; }
+      const header = grid[0].map((h) => h.toLowerCase().trim());
+      const hasHeader = header.some((h) => /type|question|prompt/.test(h));
+      const idx = (...names) => { for (const n of names) { const i = header.indexOf(n); if (i >= 0) return i; } return -1; };
+      const cols = hasHeader ? {
+        type: idx('type'), prompt: idx('question', 'prompt'),
+        a: idx('option a', 'a', 'optiona'), b: idx('option b', 'b', 'optionb'), c: idx('option c', 'c', 'optionc'),
+        d: idx('option d', 'd', 'optiond'), e: idx('option e', 'e', 'optione'), f: idx('option f', 'f', 'optionf'),
+        correct: idx('correct', 'answer', 'correct answer'), points: idx('points', 'marks'),
+        topic: idx('topic'), difficulty: idx('difficulty', 'level'), explanation: idx('explanation', 'solution'),
+      } : { type: 0, prompt: 1, a: 2, b: 3, c: 4, d: 5, e: -1, f: -1, correct: 6, points: 7, topic: 8, difficulty: 9, explanation: 10 };
+      const g = (row, i) => (i >= 0 && row[i] != null ? row[i] : '');
+      const dataRows = hasHeader ? grid.slice(1) : grid;
+      const qs = dataRows.map((c) => {
+        const type = typeAlias(g(c, cols.type));
+        const prompt = g(c, cols.prompt).trim();
+        const optCells = [cols.a, cols.b, cols.c, cols.d, cols.e, cols.f].map((i) => g(c, i).trim());
+        const options = []; const map = {};
+        optCells.forEach((v, i) => { if (v) { map[String.fromCharCode(65 + i)] = options.length; options.push(v); } });
+        const correctRaw = g(c, cols.correct).trim();
+        let correct = '';
+        if (type === 'mcq') { const byL = map[correctRaw.toUpperCase()]; correct = byL != null ? byL : (Number.isInteger(+correctRaw) && correctRaw !== '' ? +correctRaw - 1 : -1); }
+        else if (type === 'multi') { correct = correctRaw.split(/[,;|/\s]+/).map((s) => map[s.trim().toUpperCase()]).filter((x) => x != null); }
+        else if (type === 'truefalse') { correct = /^(t|true|1|yes)/i.test(correctRaw) ? 'true' : 'false'; }
+        const points = parseInt(g(c, cols.points), 10);
+        return { type, prompt, options, correct, points: Number.isInteger(points) && points > 0 ? points : 1, topic: g(c, cols.topic).trim(), difficulty: g(c, cols.difficulty).trim(), explanation: g(c, cols.explanation).trim() };
+      }).filter((q) => q.type || q.prompt);
+      if (!qs.length) setMsg('No questions found. Expected columns: Type, Question, Option A–D, Correct, Points, Topic, Difficulty, Explanation.');
+      setRows(qs);
+    };
+    reader.onerror = () => setMsg('Could not read the file.');
+    reader.readAsText(file);
+  }
+
+  async function submit() {
+    if (!rows || !rows.length) return;
+    setBusy(true); setMsg('');
+    try { setResult(await api('/api/bank/bulk', 'POST', { questions: rows })); }
+    catch (e) { setMsg(e.message); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <Modal title="Import questions from CSV" onClose={onClose} wide>
+      {!result ? (
+        <>
+          <p className="muted">Upload a CSV with columns <b>Type, Question, Option A–D, Correct, Points, Topic, Difficulty, Explanation</b>. <b>Type</b> is <code>mcq</code>, <code>multi</code>, <code>truefalse</code>, or <code>short</code>; <b>Correct</b> is the option letter(s) — e.g. <code>B</code> or <code>A,C</code> — or True/False. Maths can use <code>$…$</code> LaTeX.</p>
+          <p><a href={BANK_TEMPLATE} download="question-bank-template.csv">⬇ Download a template</a></p>
+          <input type="file" accept=".csv,text/csv" onChange={(e) => onFile(e.target.files[0])} />
+          {rows && <p className="muted" style={{ marginTop: 8 }}>{fileName}: <b>{rows.length}</b> question(s) ready to import.</p>}
+          {msg && <Msg text={msg} />}
+          <div className="row" style={{ marginTop: 16, gap: 10 }}>
+            <button className="btn" disabled={!rows || !rows.length || busy} onClick={submit}>{busy ? 'Importing…' : `Import ${rows && rows.length ? rows.length : ''} question(s)`}</button>
+            <button className="btn ghost" onClick={onClose}>Cancel</button>
+          </div>
+        </>
+      ) : (
+        <>
+          <Msg text={`Imported ${result.created} question(s)${result.skipped.length ? `, skipped ${result.skipped.length}.` : '.'}`} kind="ok" />
+          {result.skipped.length > 0 && (
+            <div style={{ marginTop: 8, maxHeight: 220, overflowY: 'auto' }}>
+              <table style={{ width: '100%', fontSize: 13 }}>
+                <thead><tr><th style={{ textAlign: 'left' }}>Skipped</th><th style={{ textAlign: 'left' }}>Reason</th></tr></thead>
+                <tbody>{result.skipped.map((s, i) => <tr key={i}><td>{s.label}</td><td className="muted">{s.reason}</td></tr>)}</tbody>
+              </table>
+            </div>
+          )}
+          <div className="row" style={{ marginTop: 16 }}>
+            <button className="btn" onClick={() => onDone(result)}>Done</button>
+          </div>
+        </>
+      )}
+    </Modal>
   );
 }
 

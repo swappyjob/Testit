@@ -39,6 +39,7 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
   const [penalty, setPenalty] = useState(1);
   const [proctored, setProctored] = useState(false);
   const [maxViolations, setMaxViolations] = useState(3);
+  const [shuffleQuestions, setShuffleQuestions] = useState(false);
   const [defaultPoints, setDefaultPoints] = useState(1);
   const [sections, setSections] = useState([]);
   const [newSection, setNewSection] = useState('');
@@ -71,6 +72,7 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
       setSlots(Array.isArray(sl) ? sl.map((s) => ({ id: s.id, at: s.at, capacity: s.capacity })) : []);
       setNegativeMarking(!!test.negative_marking); setPenalty(test.penalty > 0 ? test.penalty : 1);
       setProctored(!!test.proctored); setMaxViolations(test.max_violations > 0 ? test.max_violations : 3);
+      setShuffleQuestions(!!test.shuffle_questions);
       const mapped = qs.map((q) => ({
         type: q.type, prompt: q.prompt,
         options: q.type === 'mcq' || q.type === 'multi' ? q.options : [],
@@ -93,6 +95,7 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
       setSlots(Array.isArray(s.slots) ? s.slots : []);
       setNegativeMarking(!!s.negativeMarking); setPenalty(s.penalty > 0 ? s.penalty : 1);
       setProctored(!!s.proctored); setMaxViolations(s.maxViolations > 0 ? s.maxViolations : 3);
+      setShuffleQuestions(!!s.shuffleQuestions);
       setDefaultPoints(s.defaultPoints > 0 ? s.defaultPoints : 1);
       setSections(Array.isArray(s.sections) ? s.sections : []);
       setQuestions(Array.isArray(s.questions) && s.questions.length ? s.questions : [blankQuestion('mcq', s.defaultPoints || 1)]);
@@ -106,9 +109,9 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
   }, [editId, propDraftId]);
 
   // ---- Auto-save (new/draft only), debounced, only after a real change ----
-  const snapshot = JSON.stringify({ title, description, dueDate, startsAt, requiresSlot, slots, durationMinutes, negativeMarking, penalty, proctored, maxViolations, defaultPoints, sections, questions, page });
+  const snapshot = JSON.stringify({ title, description, dueDate, startsAt, requiresSlot, slots, durationMinutes, negativeMarking, penalty, proctored, maxViolations, shuffleQuestions, defaultPoints, sections, questions, page });
   // Content only (no page) — used to dismiss the edit-mode "Saved" tick on real edits, not on navigation.
-  const contentSnap = JSON.stringify({ title, description, dueDate, startsAt, requiresSlot, slots, durationMinutes, negativeMarking, penalty, proctored, maxViolations, sections, questions });
+  const contentSnap = JSON.stringify({ title, description, dueDate, startsAt, requiresSlot, slots, durationMinutes, negativeMarking, penalty, proctored, maxViolations, shuffleQuestions, sections, questions });
   async function saveDraft() {
     if (savingRef.current) return;
     savingRef.current = true;
@@ -237,6 +240,7 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
       slots: requiresSlot ? slots.filter((s) => s.at).map((s) => ({ id: s.id, at: s.at, capacity: Number(s.capacity) || 0 })) : [],
       negativeMarking, penalty,
       proctored, maxViolations: Number(maxViolations) || 3,
+      shuffleQuestions,
       questions: cleanQuestions(),
     };
   }
@@ -357,6 +361,16 @@ export default function TestBuilder({ editId, draftId: propDraftId, onSaved, onC
                   <input type="number" min="1" step="1" value={maxViolations} onChange={(e) => setMaxViolations(Number(e.target.value) || 1)} style={{ width: 120 }} />
                 </div>
               )}
+            </div>
+          </div>
+
+          <div className="q-card" style={{ marginTop: 16 }}>
+            <div className="row" style={{ alignItems: 'center', gap: 6 }}>
+              <label className="choice" style={{ fontWeight: 600, margin: 0 }}>
+                <input type="checkbox" checked={shuffleQuestions} onChange={(e) => setShuffleQuestions(e.target.checked)} />
+                🔀 Shuffle question order for each student
+              </label>
+              <InfoTip label="How shuffling works" text="Each student sees the questions in a random order (shuffled within each section), so neighbours can't copy by question number. The order is fixed for a student once they start. Answer options are NOT shuffled, and scoring is unaffected." />
             </div>
           </div>
 

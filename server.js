@@ -1439,6 +1439,34 @@ app.post('/api/bank', requireAuth('teacher'), requireActiveSubscription, h(async
   res.json({ id });
 }));
 
+// Bulk-create bank questions (e.g. from a CSV import). Each entry is a builder-
+// shape question; invalid rows are skipped and reported with a reason.
+app.post('/api/bank/bulk', requireAuth('teacher'), requireActiveSubscription, h(async (req, res) => {
+  const rows = Array.isArray(req.body.questions) ? req.body.questions : [];
+  if (rows.length === 0) return res.status(400).json({ error: 'No questions found in the file.' });
+  if (rows.length > 1000) return res.status(400).json({ error: 'Please import at most 1000 questions at a time.' });
+  const created = [], skipped = [];
+  await tx(async (t) => {
+    for (let i = 0; i < rows.length; i++) {
+      const q = rows[i] || {};
+      const label = q.prompt ? String(q.prompt).trim().slice(0, 50) : `Row ${i + 1}`;
+      const invalid = validateQuestions([q]);
+      if (invalid) { skipped.push({ label, reason: invalid.replace(/^Question \d+ /, 'It ') }); continue; }
+      const n = normalizeQuestion(q);
+      const topic = String(q.topic || '').trim().slice(0, 100);
+      const difficulty = String(q.difficulty || '').trim().slice(0, 20);
+      await t.run(
+        `INSERT INTO bank_questions (org_id, created_by, type, prompt, options_json, correct_answer, points, image_url, explanation, topic, difficulty)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [req.user.org_id, req.user.id, n.type, n.prompt, n.options_json, n.correct_answer, n.points, n.image_url, n.explanation, topic, difficulty]
+      );
+      created.push(label);
+    }
+  });
+  if (created.length) await logAudit(req, { action: 'test.create', entityType: 'bank', entityLabel: `${created.length} bank questions`, details: `CSV import (${created.length} added, ${skipped.length} skipped)` });
+  res.json({ created: created.length, skipped });
+}));
+
 app.put('/api/bank/:id', requireAuth('teacher'), requireActiveSubscription, h(async (req, res) => {
   const existing = await get('SELECT id FROM bank_questions WHERE id = ? AND org_id = ?', [Number(req.params.id), req.user.org_id]);
   if (!existing) return res.status(404).json({ error: 'Question not found.' });
@@ -1696,6 +1724,24 @@ function readProctoring(body) {
   const n = Math.round(Number(body.maxViolations));
   return { proctored, maxViolations: Number.isFinite(n) && n >= 1 ? n : 3 };
 }
+function readShuffle(body) {
+  return { shuffle_questions: body.shuffleQuestions ? 1 : 0 };
+}
+
+// ---- Per-student question-order shuffling ----------------------------------
+function shuffleArr(a) {
+  const arr = a.slice();
+  for (let i = arr.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [arr[i], arr[j]] = [arr[j], arr[i]]; }
+  return arr;
+}
+// Freeze one attempt's question order. `questions` are in position order. The
+// order is shuffled WITHIN each section (sections stay grouped). Options are left
+// untouched, and answers are keyed by question id, so grading is unaffected.
+function buildQuestionOrder(questions) {
+  const groups = []; const gmap = {};
+  for (const q of questions) { const s = q.section || ''; if (!(s in gmap)) { gmap[s] = []; groups.push(gmap[s]); } gmap[s].push(q.id); }
+  return [].concat(...groups.map((g) => shuffleArr(g)));
+}
 
 // ---- Scheduled windows & booked time slots --------------------------------
 // Optional start date — like readDueDate but for when a test opens.
@@ -1784,6 +1830,7 @@ app.post('/api/tests', requireAuth('teacher'), requireActiveSubscription, h(asyn
   const startsAt = readStartDate(req.body);
   const duration = readDuration(req.body);
   const { proctored, maxViolations } = readProctoring(req.body);
+  const { shuffle_questions } = readShuffle(req.body);
   const requiresSlot = req.body.requiresSlot ? 1 : 0;
   const slots = normalizeSlots(req.body.slots);
   const slotErr = validateSlotSetup(requiresSlot, slots, duration);
@@ -1791,8 +1838,8 @@ app.post('/api/tests', requireAuth('teacher'), requireActiveSubscription, h(asyn
 
   const testId = await tx(async (t) => {
     const newId = (await t.run(
-      'INSERT INTO tests (teacher_id, title, description, negative_marking, penalty, due_date, starts_at, duration_minutes, proctored, max_violations, requires_slot) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
-      [req.user.id, title, description, negative_marking, penalty, dueDate, startsAt, duration, proctored, maxViolations, requiresSlot]
+      'INSERT INTO tests (teacher_id, title, description, negative_marking, penalty, due_date, starts_at, duration_minutes, proctored, max_violations, requires_slot, shuffle_questions) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
+      [req.user.id, title, description, negative_marking, penalty, dueDate, startsAt, duration, proctored, maxViolations, requiresSlot, shuffle_questions]
     )).rows[0].id;
     await writeQuestions(t.run, newId, questions);
     if (requiresSlot) await writeSlots(t, newId, slots);
@@ -1817,6 +1864,7 @@ app.put('/api/tests/:id', requireAuth('teacher'), requireActiveSubscription, h(a
   const startsAt = readStartDate(req.body);
   const duration = readDuration(req.body);
   const { proctored, maxViolations } = readProctoring(req.body);
+  const { shuffle_questions } = readShuffle(req.body);
   const requiresSlot = req.body.requiresSlot ? 1 : 0;
   const slots = normalizeSlots(req.body.slots);
   const slotErr = validateSlotSetup(requiresSlot, slots, duration);
@@ -1835,8 +1883,8 @@ app.put('/api/tests/:id', requireAuth('teacher'), requireActiveSubscription, h(a
       else await t.run('DELETE FROM questions WHERE id = ?', [q.id]);
     }
     await t.run(
-      'UPDATE tests SET title = ?, description = ?, negative_marking = ?, penalty = ?, due_date = ?, starts_at = ?, duration_minutes = ?, proctored = ?, max_violations = ?, requires_slot = ? WHERE id = ?',
-      [title, description, negative_marking, penalty, dueDate, startsAt, duration, proctored, maxViolations, requiresSlot, test.id]
+      'UPDATE tests SET title = ?, description = ?, negative_marking = ?, penalty = ?, due_date = ?, starts_at = ?, duration_minutes = ?, proctored = ?, max_violations = ?, requires_slot = ?, shuffle_questions = ? WHERE id = ?',
+      [title, description, negative_marking, penalty, dueDate, startsAt, duration, proctored, maxViolations, requiresSlot, shuffle_questions, test.id]
     );
     await writeQuestions(t.run, test.id, questions);
     // Turning slot booking off (or editing the slot list) reconciles rows;
@@ -2264,7 +2312,7 @@ app.get('/api/take/:assignmentId', requireAuth('student'), h(async (req, res) =>
   if (attempt && attempt.submitted_at)
     return res.status(409).json({ error: 'You have already submitted this test.' });
 
-  const test = await get('SELECT id, title, description, negative_marking, penalty, due_date, starts_at, duration_minutes, requires_slot, proctored, max_violations FROM tests WHERE id = ?', [a.test_id]);
+  const test = await get('SELECT id, title, description, negative_marking, penalty, due_date, starts_at, duration_minutes, requires_slot, proctored, max_violations, shuffle_questions FROM tests WHERE id = ?', [a.test_id]);
   if (isClosed(test.due_date))
     return res.status(403).json({ error: 'The deadline for this test has passed. You can no longer take it.' });
   if (notYetOpen(test.starts_at))
@@ -2305,7 +2353,7 @@ app.get('/api/take/:assignmentId', requireAuth('student'), h(async (req, res) =>
   // resumed after a disconnect. For timed tests this also anchors the countdown.
   if (!attempt) {
     attempt = (await run(
-      'INSERT INTO attempts (assignment_id, test_id, student_id) VALUES (?, ?, ?) RETURNING id, started_at, draft_answers, current_index',
+      'INSERT INTO attempts (assignment_id, test_id, student_id) VALUES (?, ?, ?) RETURNING id, started_at, draft_answers, current_index, shuffle',
       [a.id, a.test_id, req.user.id]
     )).rows[0];
   }
@@ -2322,10 +2370,26 @@ app.get('/api/take/:assignmentId', requireAuth('student'), h(async (req, res) =>
   let savedAnswers = {};
   try { const p = JSON.parse(attempt.draft_answers || '{}'); if (p && typeof p === 'object') savedAnswers = p; } catch { /* ignore */ }
 
-  const questions = (await all(
+  let questions = (await all(
     'SELECT id, type, prompt, options_json, image_url, points, section FROM questions WHERE test_id = ? AND archived = 0 ORDER BY position',
     [a.test_id]
   )).map((q) => ({ id: q.id, type: q.type, prompt: q.prompt, points: q.points, image: q.image_url, section: q.section, options: JSON.parse(q.options_json) }));
+
+  // Per-student question order: freeze it on first serve, then reuse it so the
+  // order stays stable across reloads/resume. (Options are untouched; answers are
+  // keyed by question id, so grading is unaffected.)
+  let order = null;
+  try { const s = JSON.parse(attempt.shuffle || 'null'); if (s && Array.isArray(s.order)) order = s.order; } catch { /* ignore */ }
+  if (test.shuffle_questions && !order) {
+    order = buildQuestionOrder(questions);
+    await run('UPDATE attempts SET shuffle = ? WHERE id = ?', [JSON.stringify({ order }), attempt.id]);
+  }
+  if (order) {
+    const byId = new Map(questions.map((q) => [q.id, q]));
+    const inOrder = new Set(order);
+    questions = order.map((id) => byId.get(id)).filter(Boolean)
+      .concat(questions.filter((q) => !inOrder.has(q.id))); // any added-later questions go last
+  }
   res.json({ test, questions, durationMinutes: test.duration_minutes, remainingSeconds, savedAnswers, currentIndex: attempt.current_index || 0 });
 }));
 
